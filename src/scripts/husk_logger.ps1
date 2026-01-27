@@ -29,7 +29,12 @@ function Convert-RangePairs {
     $result = @()
     if (-not $ranges) { return $result }
     foreach ($r in $ranges) {
-        if ($r -is [System.Collections.IEnumerable] -and $r.Count -ge 1) {
+        # ハッシュテーブル形式の場合
+        if ($r -is [hashtable] -and $r.ContainsKey('start') -and $r.ContainsKey('end')) {
+            $result += @{ start = [int]$r.start; end = [int]$r.end }
+        }
+        # 旧形式（配列）との互換性
+        elseif ($r -is [System.Collections.IEnumerable] -and $r.Count -ge 1) {
             $s = [int]$r[0]
             $e = if ($r.Count -ge 2) { [int]$r[1] } else { [int]$r[0] }
             $result += @{ start = $s; end = $e }
@@ -218,11 +223,16 @@ $renderedFiles = @() # レンダリングしたファイル情報を保存
 # 総レンダリング回数を計算とレンダリングプランの事前表示
 $totalRenderCount = 0
 $renderPlans = @()
-Write-Host "USDファイルを解析中..." -ForegroundColor Gray
+$isAutoMode = $conf["BATCH_MODE"] -eq "Auto"
+if ($isAutoMode) {
+    Write-Host "USDファイルを解析中..." -ForegroundColor Gray
+}
 foreach ($usdPath in $usdList) {
     if (!(Test-Path $usdPath)) { continue }
     $usdFileName = [System.IO.Path]::GetFileName($usdPath)
-    Write-Host "  解析中: $usdFileName" -ForegroundColor DarkGray -NoNewline
+    if ($isAutoMode) {
+        Write-Host "  解析中: $usdFileName" -ForegroundColor DarkGray -NoNewline
+    }
     
     $normalized = Normalize-UsdPath $usdPath
     $override = $usdOverrides[$normalized]
@@ -230,9 +240,13 @@ foreach ($usdPath in $usdList) {
     $totalRenderCount += $plan.Ranges.Count
     $renderPlans += $plan
     
-    Write-Host " ✓" -ForegroundColor Green
+    if ($isAutoMode) {
+        Write-Host " ✓" -ForegroundColor Green
+    }
 }
-Write-Host "解析完了`n" -ForegroundColor Green
+if ($isAutoMode) {
+    Write-Host "解析完了`n" -ForegroundColor Green
+}
 
 Write-Host "[START] Husk Batch Rendering" -ForegroundColor Cyan
 Write-Host "総レンダリング回数: $totalRenderCount" -ForegroundColor Cyan

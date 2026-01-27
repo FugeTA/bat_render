@@ -36,11 +36,12 @@ function Parse-RangeText {
         $token = $chunk.Trim()
         if (-not $token) { continue }
         if ($token -match "^(-?\d+)-(-?\d+)$") {
-            # カンマ演算子で配列として明示的にラップ
-            $ranges += ,@([int]$matches[1], [int]$matches[2])
+            $start = [int]$matches[1]
+            $end = [int]$matches[2]
+            $ranges += @{ start = $start; end = $end }
         } elseif ($token -match "^(-?\d+)$") {
-            # カンマ演算子で配列として明示的にラップ
-            $ranges += ,@([int]$matches[1], [int]$matches[1])
+            $val = [int]$matches[1]
+            $ranges += @{ start = $val; end = $val }
         } else {
             return $null
         }
@@ -98,16 +99,16 @@ function Get-RangeSummary {
         }
         elseif ($override.batchMode -eq "Multi" -and $override.ranges) {
             $parts = $override.ranges | ForEach-Object {
-                if ($_.Count -ge 2) { "{0}-{1}" -f $_[0], $_[1] }
-                elseif ($_.Count -eq 1) { "{0}" -f $_[0] }
+                if ($_.start -eq $_.end) { "{0}" -f $_.start }
+                else { "{0}-{1}" -f $_.start, $_.end }
             }
             return ($parts -join ", ")
         }
     }
     if ($override -and $override.ranges) {
         $parts = $override.ranges | ForEach-Object {
-            if ($_.Count -ge 2) { "{0}-{1}" -f $_[0], $_[1] }
-            elseif ($_.Count -eq 1) { "{0}" -f $_[0] }
+            if ($_.start -eq $_.end) { "{0}" -f $_.start }
+            else { "{0}-{1}" -f $_.start, $_.end }
         }
         return ($parts -join ", ")
     }
@@ -119,6 +120,16 @@ function Get-RangeSummary {
 
 function Get-OutputSummary {
     param($override, $conf)
+    # outToggleの状態を確認
+    $outToggle = if ($override -and $override.ContainsKey('outToggle')) { 
+        $override.outToggle 
+    } else { 
+        [System.Convert]::ToBoolean($conf["OUT_TOGGLE"]) 
+    }
+    
+    # outToggleがオフの場合は「(デフォルト)」を表示
+    if (-not $outToggle) { return "(デフォルト)" }
+    
     if ($override -and $override.outPath) {
         $short = [System.IO.Path]::GetFileName($override.outPath)
         if($short){ return $short }else{ return $override.outPath }
@@ -174,6 +185,9 @@ function Load-UsdSettings {
     $rbNameUSD.Checked = ($conf["OUT_NAME_MODE"] -eq "USD")
     $rbNameCustom.Checked = ($conf["OUT_NAME_MODE"] -eq "Custom")
     $tNameBase.Text = $conf["OUT_NAME_BASE"]
+    $chkOutToggle.Checked = [System.Convert]::ToBoolean($conf["OUT_TOGGLE"])
+    $tExt.Text = $conf["EXT"]
+    $nPad.Value = [int]$conf["PADDING"]
     $trackRes.Value = [int]([float]$conf["RES_SCALE"]/10)
     $nPS.Value = [int]$conf["PIXEL_SAMPLES"]
     $comboEngine.Text = $conf["ENGINE_TYPE"]
@@ -191,16 +205,25 @@ function Load-UsdSettings {
         } elseif ($override.batchMode -eq "Multi") {
             $rbMulti.Checked = $true
             if ($override.ranges) {
-                $txtRanges.Text = ($override.ranges | ForEach-Object { if ($_.Count -ge 2) { "{0}-{1}" -f $_[0], $_[1] } elseif ($_.Count -eq 1) { "{0}" -f $_[0] } } ) -join ","
+                $txtRanges.Text = ($override.ranges | ForEach-Object { 
+                    if ($_.start -eq $_.end) { "{0}" -f $_.start }
+                    else { "{0}-{1}" -f $_.start, $_.end }
+                } ) -join ","
             }
         } elseif ($override.ranges) {
             # 旧形式の互換性のため
             $rbMulti.Checked = $true
-            $txtRanges.Text = ($override.ranges | ForEach-Object { if ($_.Count -ge 2) { "{0}-{1}" -f $_[0], $_[1] } elseif ($_.Count -eq 1) { "{0}" -f $_[0] } } ) -join ","
+            $txtRanges.Text = ($override.ranges | ForEach-Object { 
+                if ($_.start -eq $_.end) { "{0}" -f $_.start }
+                else { "{0}-{1}" -f $_.start, $_.end }
+            } ) -join ","
         }
         if ($override.outPath) { $tOUT.Text = $override.outPath }
         if ($override.nameMode -eq "Custom") { $rbNameCustom.Checked = $true; if($override.nameBase){ $tNameBase.Text = $override.nameBase } }
         elseif ($override.nameMode -eq "USD") { $rbNameUSD.Checked = $true }
+        if ($override.ContainsKey('outToggle')) { $chkOutToggle.Checked = $override.outToggle }
+        if ($override.ext) { $tExt.Text = $override.ext }
+        if ($override.padding) { $nPad.Value = [int]$override.padding }
         if ($override.resScale) { $trackRes.Value = [int]($override.resScale / 10) }
         if ($override.pixelSamples) { $nPS.Value = [int]$override.pixelSamples }
         if ($override.engine) { $comboEngine.Text = $override.engine }
@@ -239,6 +262,9 @@ function Save-CurrentUsdSettings {
     if ($rbNameCustom.Checked -and -not [string]::IsNullOrWhiteSpace($tNameBase.Text)) {
         $override.nameMode = "Custom"; $override.nameBase = $tNameBase.Text
     } elseif ($rbNameUSD.Checked) { $override.nameMode = "USD" }
+    if ($chkOutToggle.Checked -ne [System.Convert]::ToBoolean($conf["OUT_TOGGLE"])) { $override.outToggle = $chkOutToggle.Checked }
+    if ($tExt.Text -ne $conf["EXT"]) { $override.ext = $tExt.Text }
+    if ([int]$nPad.Value -ne [int]$conf["PADDING"]) { $override.padding = [int]$nPad.Value }
     if ($trackRes.Value * 10 -ne [int]$conf["RES_SCALE"]) { $override.resScale = [int]($trackRes.Value * 10) }
     if ($nPS.Value -ne [int]$conf["PIXEL_SAMPLES"]) { $override.pixelSamples = [int]$nPS.Value }
     if ($comboEngine.Text -ne $conf["ENGINE_TYPE"]) { $override.engine = $comboEngine.Text }
@@ -327,23 +353,26 @@ $tExt = New-Object Windows.Forms.TextBox; $tExt.Text=$conf["EXT"]; $tExt.Locatio
 $nPad = New-Object Windows.Forms.NumericUpDown; $nPad.Location="230,122"; $nPad.Width=50; $nPad.Minimum=1; $nPad.Value=[int]$conf["PADDING"]; $groupOut.Controls.Add($nPad)
 $lPreview = New-Object Windows.Forms.Label; $lPreview.Text="Preview: ---"; $lPreview.Location="15,165"; $lPreview.Size="430,55"; $lPreview.ForeColor="Blue"; $lPreview.Font = New-Object System.Drawing.Font("Consolas", 8); $groupOut.Controls.Add($lPreview)
 
-$y += 270
+$y += 250
 # 4. レンダリング範囲設定
-$groupMode = New-Object Windows.Forms.GroupBox; $groupMode.Text="4. レンダリング範囲設定 (選択中のUSD)"; $groupMode.Location="$leftX,$y"; $groupMode.Size="460,230"; $f.Controls.Add($groupMode)
+$groupMode = New-Object Windows.Forms.GroupBox; $groupMode.Text="4. レンダリング範囲設定 (選択中のUSD)"; $groupMode.Location="$leftX,$y"; $groupMode.Size="460,180"; $f.Controls.Add($groupMode)
 $rbAuto = New-Object Windows.Forms.RadioButton; $rbAuto.Text="自動解析 (各USDのフレーム範囲を使用)"; $rbAuto.Location="15,20"; $rbAuto.Width=300; $rbAuto.Checked = ($conf["BATCH_MODE"] -eq "Auto"); $groupMode.Controls.Add($rbAuto)
 $rbManual = New-Object Windows.Forms.RadioButton; $rbManual.Text="範囲設定"; $rbManual.Location="15,45"; $rbManual.Width=100; $rbManual.Checked = ($conf["BATCH_MODE"] -eq "Manual"); $groupMode.Controls.Add($rbManual)
-$nFS = New-Object Windows.Forms.NumericUpDown; $nFS.Location="120,43"; $nFS.Width=70; $nFS.Minimum=-999999; $nFS.Maximum=999999; $nFS.Value=[int]$conf["START_FRM"]; $groupMode.Controls.Add($nFS)
-$lTo = New-Object Windows.Forms.Label; $lTo.Text="～"; $lTo.Location="195,47"; $lTo.Width=20; $groupMode.Controls.Add($lTo)
-$nFE = New-Object Windows.Forms.NumericUpDown; $nFE.Location="220,43"; $nFE.Width=70; $nFE.Minimum=-999999; $nFE.Maximum=999999; $nFE.Value=[int]$conf["END_FRM"]; $groupMode.Controls.Add($nFE)
+$nFS = New-Object Windows.Forms.NumericUpDown; $nFS.Location="120,48"; $nFS.Width=70; $nFS.Minimum=-999999; $nFS.Maximum=999999; $nFS.Value=[int]$conf["START_FRM"]; $groupMode.Controls.Add($nFS)
+$lTo = New-Object Windows.Forms.Label; $lTo.Text="～"; $lTo.Location="195,51"; $lTo.Width=20; $groupMode.Controls.Add($lTo)
+$nFE = New-Object Windows.Forms.NumericUpDown; $nFE.Location="220,48"; $nFE.Width=70; $nFE.Minimum=-999999; $nFE.Maximum=999999; $nFE.Value=[int]$conf["END_FRM"]; $groupMode.Controls.Add($nFE)
 $rbMulti = New-Object Windows.Forms.RadioButton; $rbMulti.Text="複数設定 (例: 1001-1010,1050)"; $rbMulti.Location="15,70"; $rbMulti.Width=300; $rbMulti.Checked=$false; $groupMode.Controls.Add($rbMulti)
 $txtRanges = New-Object Windows.Forms.TextBox; $txtRanges.Location="15,95"; $txtRanges.Width=430; $txtRanges.Enabled=$false; $groupMode.Controls.Add($txtRanges)
 $btnAnalyze = New-Object Windows.Forms.Button; $btnAnalyze.Text="解析"; $btnAnalyze.Location="300,125"; $btnAnalyze.Size="140,40"; $groupMode.Controls.Add($btnAnalyze)
-$lbRange = New-Object Windows.Forms.Label; $lbRange.Text="(USD Range: -- to --)"; $lbRange.Location="120,170"; $lbRange.Width=300; $lbRange.ForeColor="Gray"; $groupMode.Controls.Add($lbRange)
-$cS = New-Object Windows.Forms.CheckBox; $cS.Text="単一フレームのみレンダリング"; $cS.Location="30,200"; $cS.Width=250; $cS.Checked = [System.Convert]::ToBoolean($conf["SINGLE"]); $groupMode.Controls.Add($cS)
+$cS = New-Object Windows.Forms.CheckBox; $cS.Text="単一フレーム"; $cS.Location="300,46"; $cS.Width=100; $cS.Checked = [System.Convert]::ToBoolean($conf["SINGLE"]); $groupMode.Controls.Add($cS)
+
+# --- ini設定に戻すボタン ---
+$advX = 500; $advY = 10
+$btnResetToIni = New-Object Windows.Forms.Button; $btnResetToIni.Text="ini設定に戻す"; $btnResetToIni.Location="$advX,$advY"; $btnResetToIni.Size="280,40"; $f.Controls.Add($btnResetToIni)
 
 # --- Advanced Settings (右側) ---
-$advX = 500; $advY = 10
-$groupAdv = New-Object Windows.Forms.GroupBox; $groupAdv.Text="Advanced Settings"; $groupAdv.Location="$advX,$advY"; $groupAdv.Size="280,625"; $f.Controls.Add($groupAdv)
+$advY = 60
+$groupAdv = New-Object Windows.Forms.GroupBox; $groupAdv.Text="Advanced Settings"; $groupAdv.Location="$advX,$advY"; $groupAdv.Size="280,530"; $f.Controls.Add($groupAdv)
 
 # 1. Render Setting グループ
 $groupRender = New-Object Windows.Forms.GroupBox; $groupRender.Text="1. Render Setting"; $groupRender.Location="10,20"; $groupRender.Size="260,180"; $groupAdv.Controls.Add($groupRender)
@@ -381,8 +410,8 @@ if ([System.Convert]::ToBoolean($conf["REBOOT"])) {
 }
 $groupAdv.Controls.Add($comboShutdown)
 
-# 開始ボタン
-$btnRun = New-Object Windows.Forms.Button; $btnRun.Text="保存して開始"; $btnRun.Location="15,530"; $btnRun.Size="250,50"; $groupAdv.Controls.Add($btnRun)
+# --- 実行ボタン (Advanced Settingsの下) ---
+$btnRun = New-Object Windows.Forms.Button; $btnRun.Text="実行"; $btnRun.Location="$advX,600"; $btnRun.Size="280,50"; $f.Controls.Add($btnRun)
 
 # --- ロジックとイベント ---
 $updatePreview = {
@@ -417,18 +446,22 @@ $updateControlState = {
     }
 
     $count = $gridUSD.Rows.Count
-    $hasSelection = ($gridUSD.SelectedRows.Count -gt 0)
     
-    if ($count -gt 1) { 
+    if ($count -eq 0) { 
         $lModeInfo.Text="モード: 一括処理"; 
-        $rbManual.Enabled=$true; $btnAnalyze.Enabled=$hasSelection
+        $rbManual.Enabled=$true; $btnAnalyze.Enabled=$false
         $rbNameCustom.Enabled=$false; if($rbNameCustom.Checked){$rbNameUSD.Checked=$true}
         $nFS.Enabled=$rbManual.Checked; $nFE.Enabled=($rbManual.Checked -and -not $cS.Checked); $cS.Enabled=$rbManual.Checked
-    } else { 
+    } elseif ($count -eq 1) { 
         $lModeInfo.Text="モード: 単一詳細設定"; $rbManual.Enabled=$rbNameCustom.Enabled=$true
-        $tNameBase.Enabled=($rbNameCustom.Checked -and $chkOutToggle.Checked); $btnAnalyze.Enabled=($rbManual.Checked -and $hasSelection)
+        $tNameBase.Enabled=($rbNameCustom.Checked -and $chkOutToggle.Checked); $btnAnalyze.Enabled=$false
+        $nFS.Enabled=$rbManual.Checked; $nFE.Enabled=($rbManual.Checked -and -not $cS.Checked); $cS.Enabled=$rbManual.Checked
+    } else {
+        $lModeInfo.Text="モード: 単一詳細設定"; $rbManual.Enabled=$rbNameCustom.Enabled=$true
+        $tNameBase.Enabled=($rbNameCustom.Checked -and $chkOutToggle.Checked); $btnAnalyze.Enabled=$true
         $nFS.Enabled=$rbManual.Checked; $nFE.Enabled=($rbManual.Checked -and -not $cS.Checked); $cS.Enabled=$rbManual.Checked
     }
+
     # カスタマイズトグルのグレーアウト連動
     $tOUT.Enabled = $rbNameUSD.Enabled = $rbNameCustom.Enabled = $tExt.Enabled = $nPad.Enabled = $chkOutToggle.Checked
     $lWeb.Visible = ($comboNoti.Text -eq "Discord")
@@ -480,6 +513,9 @@ $tOUT.Add_TextChanged({ Save-CurrentUsdSettings; & $updateControlState })
 $rbNameUSD.Add_CheckedChanged({ Save-CurrentUsdSettings; & $updateControlState })
 $rbNameCustom.Add_CheckedChanged({ Save-CurrentUsdSettings; & $updateControlState })
 $tNameBase.Add_TextChanged({ Save-CurrentUsdSettings; & $updatePreview })
+$chkOutToggle.Add_CheckedChanged({ Save-CurrentUsdSettings; & $updateControlState })
+$tExt.Add_TextChanged({ Save-CurrentUsdSettings; & $updatePreview })
+$nPad.Add_ValueChanged({ Save-CurrentUsdSettings; & $updatePreview })
 $nPS.Add_ValueChanged({ Save-CurrentUsdSettings })
 $comboEngine.Add_SelectedIndexChanged({ Save-CurrentUsdSettings })
 $comboNoti.Add_SelectedIndexChanged({ Save-CurrentUsdSettings; & $updateControlState })
@@ -492,8 +528,6 @@ $btnAnalyze.Add_Click({
         $rangeText = "$($res.start)-$($res.end)"
         $txtRanges.Text = $rangeText
         $rbMulti.Checked = $true
-        $lbRange.Text = "(USD Range: $($res.start) to $($res.end))"
-        $lbRange.ForeColor = "DarkGreen"
         Save-CurrentUsdSettings
     }
     $btnAnalyze.Text = "解析"
@@ -523,6 +557,27 @@ $f.Add_FormClosing({
 })
 
 $btnRun.Add_Click({ $f.DialogResult = [Windows.Forms.DialogResult]::OK; $f.Close() })
+
+$btnResetToIni.Add_Click({
+    if ($gridUSD.SelectedRows.Count -eq 0) {
+        [System.Windows.Forms.MessageBox]::Show("USDファイルが選択されていません。", "エラー", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
+        return
+    }
+    $idx = $gridUSD.SelectedRows[0].Index
+    $path = $gridUSD.Rows[$idx].Tag
+    $norm = Normalize-UsdPath $path
+    if ($usdOverrides.ContainsKey($norm)) {
+        $usdOverrides.Remove($norm)
+        $gridUSD.Rows[$idx].Cells[1].Value = Get-RangeSummary $null $conf
+        $gridUSD.Rows[$idx].Cells[2].Value = Get-OutputSummary $null $conf
+        $gridUSD.Rows[$idx].Cells[3].Value = Get-StatusText $null
+        Load-UsdSettings $path
+        & $updateControlState
+        [System.Windows.Forms.MessageBox]::Show("選択中のUSDの設定を削除し、ini設定に戻しました。", "完了", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+    } else {
+        [System.Windows.Forms.MessageBox]::Show("選択中のUSDには個別設定がありません。", "情報", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+    }
+})
 
 $tHOU.AllowDrop = $true
 $tHOU.Add_DragEnter({ if ($_.Data.GetDataPresent([Windows.Forms.DataFormats]::FileDrop)) { $_.Effect = "Copy" } })
