@@ -4,6 +4,49 @@ $baseDir = Split-Path -Parent $PSScriptRoot
 $configDir = Join-Path $baseDir "config"
 if (!(Test-Path $configDir)) { New-Item -ItemType Directory $configDir | Out-Null }
 $iniPath = Join-Path $configDir "settings.ini"
+$overridePath = Join-Path $configDir "usd_overrides.xml"
+
+function Normalize-UsdPath {
+    param([string]$path)
+    if ([string]::IsNullOrWhiteSpace($path)) { return $null }
+    try { return (Resolve-Path $path -ErrorAction Stop).ProviderPath } catch { return $path }
+}
+
+function Load-UsdOverrides {
+    param([string]$path)
+    $map = @{}
+    if (!(Test-Path $path)) { return $map }
+    try {
+        $map = Import-Clixml -Path $path -ErrorAction Stop
+        if (-not $map) { $map = @{} }
+    } catch {}
+    return $map
+}
+
+function Save-UsdOverrides {
+    param($map, [string]$path)
+    $map | Export-Clixml -Path $path -Depth 10
+}
+
+function Parse-RangeText {
+    param([string]$text)
+    $ranges = @()
+    if ([string]::IsNullOrWhiteSpace($text)) { return $ranges }
+    foreach ($chunk in $text.Split(",")) {
+        $token = $chunk.Trim()
+        if (-not $token) { continue }
+        if ($token -match "^(-?\d+)-(-?\d+)$") {
+            # カンマ演算子で配列として明示的にラップ
+            $ranges += ,@([int]$matches[1], [int]$matches[2])
+        } elseif ($token -match "^(-?\d+)$") {
+            # カンマ演算子で配列として明示的にラップ
+            $ranges += ,@([int]$matches[1], [int]$matches[1])
+        } else {
+            return $null
+        }
+    }
+    return $ranges
+}
 
 # 1. デフォルト設定の読み込み
 $conf = @{ 
@@ -18,6 +61,7 @@ if (Test-Path $iniPath) {
         if ($_ -match "^([^=]+)=(.*)$") { $conf[$matches[1].Trim()] = $matches[2].Trim() }
     }
 }
+$usdOverrides = Load-UsdOverrides $overridePath
 
 Add-Type -AssemblyName System.Windows.Forms
 $f = New-Object Windows.Forms.Form
@@ -43,6 +87,189 @@ function Get-USDFrameRange {
     return $null
 }
 
+function Get-RangeSummary {
+    param($override, $conf)
+    if ($override -and $override.batchMode) {
+        if ($override.batchMode -eq "Auto") { return "(自動解析)" }
+        elseif ($override.batchMode -eq "Manual") {
+            $s = if($override.startFrame){ $override.startFrame }else{ $conf["START_FRM"] }
+            $e = if($override.endFrame){ $override.endFrame }else{ $conf["END_FRM"] }
+            return "$s-$e"
+        }
+        elseif ($override.batchMode -eq "Multi" -and $override.ranges) {
+            $parts = $override.ranges | ForEach-Object {
+                if ($_.Count -ge 2) { "{0}-{1}" -f $_[0], $_[1] }
+                elseif ($_.Count -eq 1) { "{0}" -f $_[0] }
+            }
+            return ($parts -join ", ")
+        }
+    }
+    if ($override -and $override.ranges) {
+        $parts = $override.ranges | ForEach-Object {
+            if ($_.Count -ge 2) { "{0}-{1}" -f $_[0], $_[1] }
+            elseif ($_.Count -eq 1) { "{0}" -f $_[0] }
+        }
+        return ($parts -join ", ")
+    }
+    # デフォルト値を表示
+    $batchMode = $conf["BATCH_MODE"]
+    if ($batchMode -eq "Auto") { return "(自動解析)" }
+    else { return "$($conf['START_FRM'])-$($conf['END_FRM'])" }
+}
+
+function Get-OutputSummary {
+    param($override, $conf)
+    if ($override -and $override.outPath) {
+        $short = [System.IO.Path]::GetFileName($override.outPath)
+        if($short){ return $short }else{ return $override.outPath }
+    }
+    # デフォルト値を表示
+    if ([string]::IsNullOrWhiteSpace($conf["OUT_PATH"])) { return "(USD同階層)" }
+    $short = [System.IO.Path]::GetFileName($conf["OUT_PATH"])
+    if($short){ return $short }else{ return $conf["OUT_PATH"] }
+}
+
+function Get-StatusText {
+    param($override)
+    if (-not $override -or $override.Keys.Count -eq 0) { return "" }
+    return "〇"
+}
+
+$script:currentEditingUSD = $null
+$script:updatingFromSelection = $false
+
+function Load-UsdSettings {
+    param([string]$usdPath)
+    
+    $script:updatingFromSelection = $true
+    $script:currentEditingUSD = $usdPath
+    
+    if ([string]::IsNullOrWhiteSpace($usdPath)) {
+        # グローバル設定を表示
+        $lEditingUSD.Text = "[グローバル設定]"
+        $lEditingUSD.ForeColor = "Gray"
+        $txtRanges.Text = ""
+        $txtRanges.Enabled = $false
+        $script:updatingFromSelection = $false
+        return
+    }
+    
+    $norm = Normalize-UsdPath $usdPath
+    $override = if($norm){ $usdOverrides[$norm] }else{ $null }
+    
+    $fname = [System.IO.Path]::GetFileName($usdPath)
+    $lEditingUSD.Text = "編集中: $fname"
+    $lEditingUSD.ForeColor = "DarkBlue"
+    
+    # すべてのコントロールをデフォルト値にリセット
+    $batchMode = $conf["BATCH_MODE"]
+    if ($batchMode -eq "Auto") { $rbAuto.Checked = $true }
+    elseif ($batchMode -eq "Manual") { $rbManual.Checked = $true }
+    else { $rbAuto.Checked = $true }
+    $rbMulti.Checked = $false
+    $txtRanges.Text = ""
+    $nFS.Value = [int]$conf["START_FRM"]
+    $nFE.Value = [int]$conf["END_FRM"]
+    $tOUT.Text = $conf["OUT_PATH"]
+    $rbNameUSD.Checked = ($conf["OUT_NAME_MODE"] -eq "USD")
+    $rbNameCustom.Checked = ($conf["OUT_NAME_MODE"] -eq "Custom")
+    $tNameBase.Text = $conf["OUT_NAME_BASE"]
+    $trackRes.Value = [int]([float]$conf["RES_SCALE"]/10)
+    $nPS.Value = [int]$conf["PIXEL_SAMPLES"]
+    $comboEngine.Text = $conf["ENGINE_TYPE"]
+    $comboNoti.Text = $conf["NOTIFY"]
+    
+    # オーバーライドがあれば適用
+    if ($override) {
+        # 範囲設定モードを復元
+        if ($override.batchMode -eq "Auto") {
+            $rbAuto.Checked = $true
+        } elseif ($override.batchMode -eq "Manual") {
+            $rbManual.Checked = $true
+            if ($override.startFrame) { $nFS.Value = [int]$override.startFrame }
+            if ($override.endFrame) { $nFE.Value = [int]$override.endFrame }
+        } elseif ($override.batchMode -eq "Multi") {
+            $rbMulti.Checked = $true
+            if ($override.ranges) {
+                $txtRanges.Text = ($override.ranges | ForEach-Object { if ($_.Count -ge 2) { "{0}-{1}" -f $_[0], $_[1] } elseif ($_.Count -eq 1) { "{0}" -f $_[0] } } ) -join ","
+            }
+        } elseif ($override.ranges) {
+            # 旧形式の互換性のため
+            $rbMulti.Checked = $true
+            $txtRanges.Text = ($override.ranges | ForEach-Object { if ($_.Count -ge 2) { "{0}-{1}" -f $_[0], $_[1] } elseif ($_.Count -eq 1) { "{0}" -f $_[0] } } ) -join ","
+        }
+        if ($override.outPath) { $tOUT.Text = $override.outPath }
+        if ($override.nameMode -eq "Custom") { $rbNameCustom.Checked = $true; if($override.nameBase){ $tNameBase.Text = $override.nameBase } }
+        elseif ($override.nameMode -eq "USD") { $rbNameUSD.Checked = $true }
+        if ($override.resScale) { $trackRes.Value = [int]($override.resScale / 10) }
+        if ($override.pixelSamples) { $nPS.Value = [int]$override.pixelSamples }
+        if ($override.engine) { $comboEngine.Text = $override.engine }
+        if ($override.notify) { $comboNoti.Text = $override.notify }
+    }
+    
+    $txtRanges.Enabled = $rbMulti.Checked
+    $script:updatingFromSelection = $false
+}
+
+function Save-CurrentUsdSettings {
+    if ($script:updatingFromSelection) { return }
+    if ([string]::IsNullOrWhiteSpace($script:currentEditingUSD)) { return }
+    
+    $norm = Normalize-UsdPath $script:currentEditingUSD
+    if (-not $norm) { return }
+    
+    $override = @{}
+    
+    # 範囲設定モードを保存
+    if ($rbAuto.Checked) {
+        $override.batchMode = "Auto"
+    } elseif ($rbManual.Checked) {
+        $override.batchMode = "Manual"
+        $override.startFrame = [int]$nFS.Value
+        $override.endFrame = [int]$nFE.Value
+    } elseif ($rbMulti.Checked) {
+        $override.batchMode = "Multi"
+        $rangePairs = Parse-RangeText $txtRanges.Text
+        if ($rangePairs -ne $null -and $rangePairs.Count -gt 0) { 
+            $override.ranges = $rangePairs
+        }
+    }
+    
+    if (-not [string]::IsNullOrWhiteSpace($tOUT.Text) -and $tOUT.Text -ne $conf["OUT_PATH"]) { $override.outPath = $tOUT.Text }
+    if ($rbNameCustom.Checked -and -not [string]::IsNullOrWhiteSpace($tNameBase.Text)) {
+        $override.nameMode = "Custom"; $override.nameBase = $tNameBase.Text
+    } elseif ($rbNameUSD.Checked) { $override.nameMode = "USD" }
+    if ($trackRes.Value * 10 -ne [int]$conf["RES_SCALE"]) { $override.resScale = [int]($trackRes.Value * 10) }
+    if ($nPS.Value -ne [int]$conf["PIXEL_SAMPLES"]) { $override.pixelSamples = [int]$nPS.Value }
+    if ($comboEngine.Text -ne $conf["ENGINE_TYPE"]) { $override.engine = $comboEngine.Text }
+    if ($comboNoti.Text -ne $conf["NOTIFY"]) { $override.notify = $comboNoti.Text }
+    
+    if ($override.Keys.Count -gt 0) {
+        $usdOverrides[$norm] = $override
+    } else {
+        $usdOverrides.Remove($norm) | Out-Null
+    }
+    
+    # 変更を即座にXMLファイルに保存
+    Save-UsdOverrides $usdOverrides $overridePath
+    
+    Update-GridRow $script:currentEditingUSD
+}
+
+function Update-GridRow {
+    param([string]$usdPath)
+    for($i=0; $i -lt $gridUSD.Rows.Count; $i++){
+        if($gridUSD.Rows[$i].Tag -eq $usdPath){
+            $norm = Normalize-UsdPath $usdPath
+            $ov = if($norm){ $usdOverrides[$norm] }else{ $null }
+            $gridUSD.Rows[$i].Cells[1].Value = Get-RangeSummary $ov $conf
+            $gridUSD.Rows[$i].Cells[2].Value = Get-OutputSummary $ov $conf
+            $gridUSD.Rows[$i].Cells[3].Value = Get-StatusText $ov
+            break
+        }
+    }
+}
+
 $leftX = 20; $y = 10
 # 1. Houdini Bin
 $l1 = New-Object Windows.Forms.Label; $l1.Text="1. Houdini Binフォルダ:"; $l1.Location="$leftX,$y"; $l1.AutoSize=$true; $f.Controls.Add($l1)
@@ -53,16 +280,44 @@ $lHouCheck = New-Object Windows.Forms.Label; $lHouCheck.Text=""; $lHouCheck.Loca
 $y += 55
 # 2. USDリスト
 $lModeInfo = New-Object Windows.Forms.Label; $lModeInfo.Text="[モード判定]"; $lModeInfo.Location="320,$y"; $lModeInfo.Width=160; $lModeInfo.ForeColor="DarkBlue"; $f.Controls.Add($lModeInfo)
-$l2 = New-Object Windows.Forms.Label; $l2.Text="2. 対象USDリスト (Delで削除 / Drag&Drop対応):"; $l2.Location="$leftX,$y"; $l2.AutoSize=$true; $f.Controls.Add($l2)
-$listUSD = New-Object Windows.Forms.ListBox; $listUSD.Location="$leftX,$($y+20)"; $listUSD.Size="460,100"; $f.Controls.Add($listUSD)
-if ($conf["USD_LIST"]) { $conf["USD_LIST"].Split(",") | ForEach-Object { if($_){ [void]$listUSD.Items.Add($_) } } }
-if ($dropFile) { [void]$listUSD.Items.Add($dropFile) }
+$l2 = New-Object Windows.Forms.Label; $l2.Text="2. 対象USDリスト (選択して編集 / Delで削除 / Drag&Drop対応):"; $l2.Location="$leftX,$y"; $l2.AutoSize=$true; $f.Controls.Add($l2)
+$gridUSD = New-Object Windows.Forms.DataGridView
+$gridUSD.Location="$leftX,$($y+20)"; $gridUSD.Size="460,100"
+$gridUSD.AllowUserToAddRows=$false; $gridUSD.AllowUserToResizeRows=$false; $gridUSD.AllowUserToDeleteRows=$false
+$gridUSD.RowHeadersVisible=$false; $gridUSD.SelectionMode="FullRowSelect"; $gridUSD.MultiSelect=$false
+$gridUSD.AutoSizeColumnsMode="Fill"; $gridUSD.ReadOnly=$true
+[void]$gridUSD.Columns.Add((New-Object Windows.Forms.DataGridViewTextBoxColumn -Property @{Name="USD"; HeaderText="USDファイル"; FillWeight=100}))
+[void]$gridUSD.Columns.Add((New-Object Windows.Forms.DataGridViewTextBoxColumn -Property @{Name="Range"; HeaderText="レンジ"; FillWeight=50}))
+[void]$gridUSD.Columns.Add((New-Object Windows.Forms.DataGridViewTextBoxColumn -Property @{Name="Output"; HeaderText="出力"; FillWeight=50}))
+[void]$gridUSD.Columns.Add((New-Object Windows.Forms.DataGridViewTextBoxColumn -Property @{Name="Status"; HeaderText="設定"; FillWeight=20}))
+$f.Controls.Add($gridUSD)
 
+if ($conf["USD_LIST"]) {
+    $conf["USD_LIST"].Split(",") | ForEach-Object {
+        if($_){
+            $path = $_.Trim()
+            $norm = Normalize-UsdPath $path
+            $ov = if($norm){ $usdOverrides[$norm] }else{ $null }
+            $fname = [System.IO.Path]::GetFileName($path)
+            [void]$gridUSD.Rows.Add($fname, (Get-RangeSummary $ov $conf), (Get-OutputSummary $ov $conf), (Get-StatusText $ov))
+            $gridUSD.Rows[$gridUSD.Rows.Count-1].Tag = $path
+        }
+    }
+}
+if ($dropFile) {
+    $norm = Normalize-UsdPath $dropFile
+    $ov = if($norm){ $usdOverrides[$norm] }else{ $null }
+    $fname = [System.IO.Path]::GetFileName($dropFile)
+    [void]$gridUSD.Rows.Add($fname, (Get-RangeSummary $ov $conf), (Get-OutputSummary $ov $conf), (Get-StatusText $ov))
+    $gridUSD.Rows[$gridUSD.Rows.Count-1].Tag = $dropFile
+}
+
+$lEditingUSD = New-Object Windows.Forms.Label; $lEditingUSD.Text="[グローバル設定]"; $lEditingUSD.Location="$leftX,$($y+125)"; $lEditingUSD.AutoSize=$true; $lEditingUSD.ForeColor="Gray"; $f.Controls.Add($lEditingUSD)
 $btnClear = New-Object Windows.Forms.Button; $btnClear.Text="リストをクリア"; $btnClear.Location="380,$($y+125)"; $btnClear.Size="100,25"; $f.Controls.Add($btnClear)
 
 $y += 160
 # 3. 出力設定
-$groupOut = New-Object Windows.Forms.GroupBox; $groupOut.Text="3. 出力先・ファイル名設定"; $groupOut.Location="$leftX,$y"; $groupOut.Size="460,240"; $f.Controls.Add($groupOut)
+$groupOut = New-Object Windows.Forms.GroupBox; $groupOut.Text="3. 出力先・ファイル名設定 (選択中のUSD)"; $groupOut.Location="$leftX,$y"; $groupOut.Size="460,240"; $f.Controls.Add($groupOut)
 $chkOutToggle = New-Object Windows.Forms.CheckBox; $chkOutToggle.Text="出力をカスタマイズする"; $chkOutToggle.Location="15,20"; $chkOutToggle.Width=200; $chkOutToggle.Checked = [System.Convert]::ToBoolean($conf["OUT_TOGGLE"]); $groupOut.Controls.Add($chkOutToggle)
 $tOUT = New-Object Windows.Forms.TextBox; $tOUT.Text=$conf["OUT_PATH"]; $tOUT.Location="15,65"; $tOUT.Width=430; $groupOut.Controls.Add($tOUT)
 $rbNameUSD = New-Object Windows.Forms.RadioButton; $rbNameUSD.Text="USD名"; $rbNameUSD.Location="15,95"; $rbNameUSD.Width=70; $rbNameUSD.Checked = ($conf["OUT_NAME_MODE"] -eq "USD"); $groupOut.Controls.Add($rbNameUSD)
@@ -74,15 +329,17 @@ $lPreview = New-Object Windows.Forms.Label; $lPreview.Text="Preview: ---"; $lPre
 
 $y += 270
 # 4. レンダリング範囲設定
-$groupMode = New-Object Windows.Forms.GroupBox; $groupMode.Text="4. レンダリング範囲設定"; $groupMode.Location="$leftX,$y"; $groupMode.Size="460,200"; $f.Controls.Add($groupMode)
-$rbAuto = New-Object Windows.Forms.RadioButton; $rbAuto.Text="自動解析 (各USDのフレーム範囲を使用)"; $rbAuto.Location="15,25"; $rbAuto.Width=300; $rbAuto.Checked = ($conf["BATCH_MODE"] -eq "Auto"); $groupMode.Controls.Add($rbAuto)
-$rbManual = New-Object Windows.Forms.RadioButton; $rbManual.Text="手動設定"; $rbManual.Location="15,55"; $rbManual.Width=100; $rbManual.Checked = ($conf["BATCH_MODE"] -eq "Manual"); $groupMode.Controls.Add($rbManual)
-$nFS = New-Object Windows.Forms.NumericUpDown; $nFS.Location="120,53"; $nFS.Width=70; $nFS.Minimum=-999999; $nFS.Maximum=999999; $nFS.Value=[int]$conf["START_FRM"]; $groupMode.Controls.Add($nFS)
-$lTo = New-Object Windows.Forms.Label; $lTo.Text="～"; $lTo.Location="195,57"; $lTo.Width=20; $groupMode.Controls.Add($lTo)
-$nFE = New-Object Windows.Forms.NumericUpDown; $nFE.Location="220,53"; $nFE.Width=70; $nFE.Minimum=-999999; $nFE.Maximum=999999; $nFE.Value=[int]$conf["END_FRM"]; $groupMode.Controls.Add($nFE)
-$btnAnalyze = New-Object Windows.Forms.Button; $btnAnalyze.Text="解析"; $btnAnalyze.Location="300,45"; $btnAnalyze.Size="140,40"; $groupMode.Controls.Add($btnAnalyze)
-$lbRange = New-Object Windows.Forms.Label; $lbRange.Text="(USD Range: -- to --)"; $lbRange.Location="120,85"; $lbRange.Width=300; $lbRange.ForeColor="Gray"; $groupMode.Controls.Add($lbRange)
-$cS = New-Object Windows.Forms.CheckBox; $cS.Text="単一フレームのみレンダリング"; $cS.Location="30,120"; $cS.Width=250; $cS.Checked = [System.Convert]::ToBoolean($conf["SINGLE"]); $groupMode.Controls.Add($cS)
+$groupMode = New-Object Windows.Forms.GroupBox; $groupMode.Text="4. レンダリング範囲設定 (選択中のUSD)"; $groupMode.Location="$leftX,$y"; $groupMode.Size="460,230"; $f.Controls.Add($groupMode)
+$rbAuto = New-Object Windows.Forms.RadioButton; $rbAuto.Text="自動解析 (各USDのフレーム範囲を使用)"; $rbAuto.Location="15,20"; $rbAuto.Width=300; $rbAuto.Checked = ($conf["BATCH_MODE"] -eq "Auto"); $groupMode.Controls.Add($rbAuto)
+$rbManual = New-Object Windows.Forms.RadioButton; $rbManual.Text="範囲設定"; $rbManual.Location="15,45"; $rbManual.Width=100; $rbManual.Checked = ($conf["BATCH_MODE"] -eq "Manual"); $groupMode.Controls.Add($rbManual)
+$nFS = New-Object Windows.Forms.NumericUpDown; $nFS.Location="120,43"; $nFS.Width=70; $nFS.Minimum=-999999; $nFS.Maximum=999999; $nFS.Value=[int]$conf["START_FRM"]; $groupMode.Controls.Add($nFS)
+$lTo = New-Object Windows.Forms.Label; $lTo.Text="～"; $lTo.Location="195,47"; $lTo.Width=20; $groupMode.Controls.Add($lTo)
+$nFE = New-Object Windows.Forms.NumericUpDown; $nFE.Location="220,43"; $nFE.Width=70; $nFE.Minimum=-999999; $nFE.Maximum=999999; $nFE.Value=[int]$conf["END_FRM"]; $groupMode.Controls.Add($nFE)
+$rbMulti = New-Object Windows.Forms.RadioButton; $rbMulti.Text="複数設定 (例: 1001-1010,1050)"; $rbMulti.Location="15,70"; $rbMulti.Width=300; $rbMulti.Checked=$false; $groupMode.Controls.Add($rbMulti)
+$txtRanges = New-Object Windows.Forms.TextBox; $txtRanges.Location="15,95"; $txtRanges.Width=430; $txtRanges.Enabled=$false; $groupMode.Controls.Add($txtRanges)
+$btnAnalyze = New-Object Windows.Forms.Button; $btnAnalyze.Text="解析"; $btnAnalyze.Location="300,125"; $btnAnalyze.Size="140,40"; $groupMode.Controls.Add($btnAnalyze)
+$lbRange = New-Object Windows.Forms.Label; $lbRange.Text="(USD Range: -- to --)"; $lbRange.Location="120,170"; $lbRange.Width=300; $lbRange.ForeColor="Gray"; $groupMode.Controls.Add($lbRange)
+$cS = New-Object Windows.Forms.CheckBox; $cS.Text="単一フレームのみレンダリング"; $cS.Location="30,200"; $cS.Width=250; $cS.Checked = [System.Convert]::ToBoolean($conf["SINGLE"]); $groupMode.Controls.Add($cS)
 
 # --- Advanced Settings (右側) ---
 $advX = 500; $advY = 10
@@ -124,23 +381,31 @@ if ([System.Convert]::ToBoolean($conf["REBOOT"])) {
 }
 $groupAdv.Controls.Add($comboShutdown)
 
-
+# 開始ボタン
+$btnRun = New-Object Windows.Forms.Button; $btnRun.Text="保存して開始"; $btnRun.Location="15,530"; $btnRun.Size="250,50"; $groupAdv.Controls.Add($btnRun)
 
 # --- ロジックとイベント ---
 $updatePreview = {
-    $dir = if([string]::IsNullOrWhiteSpace($tOUT.Text)){"C:/render"}else{$tOUT.Text.Replace("\","/")}
-    $dir = if([string]::IsNullOrWhiteSpace($tOUT.Text)){
-        if($listUSD.Items.Count -gt 0){ 
-            $p = Split-Path -Parent $listUSD.Items[0]; if($p){ $p.Replace("\","/") }else{ "." }
-        }else{"C:/render"}
-    }else{
-        $tOUT.Text.Replace("\","/")
+    $first = if($gridUSD.Rows.Count -gt 0){ $gridUSD.Rows[0].Tag }else{ $null }
+    $norm = Normalize-UsdPath $first
+    $ov = if($norm){ $usdOverrides[$norm] }else{ $null }
+
+    $dir = if($ov -and $ov.outPath){ $ov.outPath.Replace("\","/") } elseif([string]::IsNullOrWhiteSpace($tOUT.Text)){ if($first){ $p = Split-Path -Parent $first; if($p){ $p.Replace("\","/") }else{"."} } else {"C:/render"} } else { $tOUT.Text.Replace("\","/") }
+
+    $base = "filename"
+    if ($ov -and $ov.nameMode -eq "Custom" -and $ov.nameBase) {
+        $base = $ov.nameBase
+    } elseif ($ov -and $ov.nameMode -eq "USD") {
+        $base = if($first){ [System.IO.Path]::GetFileNameWithoutExtension($first) }else{"filename"}
+    } elseif ($rbNameUSD.Checked) {
+        $base = if($first){ [System.IO.Path]::GetFileNameWithoutExtension($first) }else{"filename"}
+    } else {
+        $base = $tNameBase.Text
     }
-    $base = if($rbNameUSD.Checked){ 
-        if($listUSD.Items.Count -gt 0){ [System.IO.Path]::GetFileNameWithoutExtension($listUSD.Items[0]) }else{"filename"}
-    }else{$tNameBase.Text}
-    $lPreview.Text = "Preview:`n$dir/$base.$('0'*($nPad.Value-1))1.$($tExt.Text.TrimStart('.'))`n(Scale: $($trackRes.Value * 10)%)"
-    $lPreview.ForeColor = if($chkOutToggle.Checked){[System.Drawing.Color]::Blue}else{[System.Drawing.Color]::Gray}
+
+    $scale = if($ov -and $ov.resScale){ $ov.resScale }else{ $trackRes.Value * 10 }
+    $lPreview.Text = "Preview:`n$dir/$base.$('0'*($nPad.Value-1))1.$($tExt.Text.TrimStart('.'))`n(Scale: $scale%)"
+    $lPreview.ForeColor = if(($chkOutToggle.Checked) -or ($ov -and $ov.outPath)){[System.Drawing.Color]::Blue}else{[System.Drawing.Color]::Gray}
 }
 
 $updateControlState = {
@@ -151,16 +416,18 @@ $updateControlState = {
         $lHouCheck.Text = "× husk.exe not found"; $lHouCheck.ForeColor = "Red"
     }
 
-    $count = $listUSD.Items.Count
+    $count = $gridUSD.Rows.Count
+    $hasSelection = ($gridUSD.SelectedRows.Count -gt 0)
+    
     if ($count -gt 1) { 
         $lModeInfo.Text="モード: 一括処理"; 
-        $rbManual.Enabled=$true; $btnAnalyze.Enabled=$false
+        $rbManual.Enabled=$true; $btnAnalyze.Enabled=$hasSelection
         $rbNameCustom.Enabled=$false; if($rbNameCustom.Checked){$rbNameUSD.Checked=$true}
         $nFS.Enabled=$rbManual.Checked; $nFE.Enabled=($rbManual.Checked -and -not $cS.Checked); $cS.Enabled=$rbManual.Checked
     } else { 
         $lModeInfo.Text="モード: 単一詳細設定"; $rbManual.Enabled=$rbNameCustom.Enabled=$true
-        $tNameBase.Enabled=($rbNameCustom.Checked -and $chkOutToggle.Checked); $btnAnalyze.Enabled=$nFS.Enabled=$rbManual.Checked
-        $nFE.Enabled=($rbManual.Checked -and -not $cS.Checked); $cS.Enabled=$rbManual.Checked
+        $tNameBase.Enabled=($rbNameCustom.Checked -and $chkOutToggle.Checked); $btnAnalyze.Enabled=($rbManual.Checked -and $hasSelection)
+        $nFS.Enabled=$rbManual.Checked; $nFE.Enabled=($rbManual.Checked -and -not $cS.Checked); $cS.Enabled=$rbManual.Checked
     }
     # カスタマイズトグルのグレーアウト連動
     $tOUT.Enabled = $rbNameUSD.Enabled = $rbNameCustom.Enabled = $tExt.Enabled = $nPad.Enabled = $chkOutToggle.Checked
@@ -178,35 +445,83 @@ $tOUT.Add_TextChanged({ & $updateControlState })
 $tNameBase.Add_TextChanged({ & $updatePreview })
 $tExt.Add_TextChanged({ & $updatePreview })
 $nPad.Add_ValueChanged({ & $updatePreview })
-$btnClear.Add_Click({ $listUSD.Items.Clear(); & $updateControlState })
-$trackRes.Add_ValueChanged({ $lRes.Text = "Resolution Scale: $($trackRes.Value * 10)%"; & $updatePreview })
-$listUSD.Add_KeyDown({ if ($_.KeyCode -eq [Windows.Forms.Keys]::Delete -and $this.SelectedIndex -ge 0) { $this.Items.RemoveAt($this.SelectedIndex); & $updateControlState } })
+$btnClear.Add_Click({ $gridUSD.Rows.Clear(); $usdOverrides.Clear(); Load-UsdSettings $null; & $updateControlState })
+$trackRes.Add_ValueChanged({ $lRes.Text = "Resolution Scale: $($trackRes.Value * 10)%"; Save-CurrentUsdSettings; & $updatePreview })
+$gridUSD.Add_SelectionChanged({
+    Save-CurrentUsdSettings
+    if ($gridUSD.SelectedRows.Count -gt 0) {
+        Load-UsdSettings $gridUSD.Rows[$gridUSD.SelectedRows[0].Index].Tag
+    } else {
+        Load-UsdSettings $null
+    }
+    & $updateControlState
+})
+$gridUSD.Add_KeyUp({
+    # KeyUpで処理することでDeleteキーリピート時の連続削除を防止
+    if ($_.KeyCode -ne [Windows.Forms.Keys]::Delete) { return }
+    if ($gridUSD.SelectedRows.Count -eq 0) { return }
+
+    $idx = $gridUSD.SelectedRows[0].Index
+    $path = $gridUSD.Rows[$idx].Tag
+    $usdOverrides.Remove((Normalize-UsdPath $path)) | Out-Null
+    $gridUSD.Rows.RemoveAt($idx)
+    Load-UsdSettings $null
+    & $updateControlState
+    $_.SuppressKeyPress = $true
+    $_.Handled = $true
+})
+$rbMulti.Add_CheckedChanged({ $txtRanges.Enabled = $rbMulti.Checked; Save-CurrentUsdSettings; & $updateControlState })
+$rbAuto.Add_CheckedChanged({ Save-CurrentUsdSettings; & $updateControlState })
+$rbManual.Add_CheckedChanged({ Save-CurrentUsdSettings; & $updateControlState })
+$nFS.Add_ValueChanged({ Save-CurrentUsdSettings; if ($cS.Checked) { $nFE.Value = $nFS.Value }; & $updatePreview })
+$nFE.Add_ValueChanged({ Save-CurrentUsdSettings; & $updatePreview })
+$txtRanges.Add_TextChanged({ Save-CurrentUsdSettings })
+$tOUT.Add_TextChanged({ Save-CurrentUsdSettings; & $updateControlState })
+$rbNameUSD.Add_CheckedChanged({ Save-CurrentUsdSettings; & $updateControlState })
+$rbNameCustom.Add_CheckedChanged({ Save-CurrentUsdSettings; & $updateControlState })
+$tNameBase.Add_TextChanged({ Save-CurrentUsdSettings; & $updatePreview })
+$nPS.Add_ValueChanged({ Save-CurrentUsdSettings })
+$comboEngine.Add_SelectedIndexChanged({ Save-CurrentUsdSettings })
+$comboNoti.Add_SelectedIndexChanged({ Save-CurrentUsdSettings; & $updateControlState })
 $btnAnalyze.Add_Click({
-    if ($listUSD.SelectedIndex -lt 0) { return }
+    if ($gridUSD.SelectedRows.Count -eq 0) { return }
     $btnAnalyze.Text = "..."; $f.Refresh()
-    $res = Get-USDFrameRange $listUSD.SelectedItem $tHOU.Text
-    if ($res) { $nFS.Value = $res.start; $nFE.Value = $res.end; $lbRange.Text = "(USD Range: $($res.start) to $($res.end))"; $lbRange.ForeColor = "DarkGreen" }
+    $path = $gridUSD.Rows[$gridUSD.SelectedRows[0].Index].Tag
+    $res = Get-USDFrameRange $path $tHOU.Text
+    if ($res) {
+        $rangeText = "$($res.start)-$($res.end)"
+        $txtRanges.Text = $rangeText
+        $rbMulti.Checked = $true
+        $lbRange.Text = "(USD Range: $($res.start) to $($res.end))"
+        $lbRange.ForeColor = "DarkGreen"
+        Save-CurrentUsdSettings
+    }
     $btnAnalyze.Text = "解析"
 })
+$nFS.Add_ValueChanged({ if ($cS.Checked) { $nFE.Value = $nFS.Value }; & $updatePreview })
+$tHOU.Add_TextChanged({ & $updateControlState })
+$tExt.Add_TextChanged({ & $updatePreview })
+$nPad.Add_ValueChanged({ & $updatePreview })
 $chkOutToggle.Add_CheckedChanged({ & $updateControlState })
-$rbNameUSD.Add_CheckedChanged({ & $updateControlState })
-$rbNameCustom.Add_CheckedChanged({ & $updateControlState })
 $rbAuto.Add_CheckedChanged({ & $updateControlState })
 $rbManual.Add_CheckedChanged({ & $updateControlState })
 $cS.Add_CheckedChanged({ & $updateControlState })
-$comboNoti.Add_SelectedIndexChanged({ & $updateControlState })
 
 # --- 保存処理をClosingイベントに集約 ---
 $f.Add_FormClosing({
+    Save-CurrentUsdSettings
     if ($f.DialogResult -eq [Windows.Forms.DialogResult]::OK) {
-        $items = if($listUSD.Items){ $listUSD.Items | ForEach-Object { $_.ToString() } } else { @() }
+        $items = @(); foreach($row in $gridUSD.Rows){ if($row.Tag){ $items += $row.Tag } }
+        $normItems = $items | ForEach-Object { Normalize-UsdPath $_ }
+        foreach ($key in @($usdOverrides.Keys)) { if (-not $normItems.Contains($key)) { $usdOverrides.Remove($key) | Out-Null } }
+
         $isReboot = ($comboShutdown.Text -eq "再起動")
         $res = @("HOUDINI_BIN=$($tHOU.Text)", "USD_LIST=$([string]::Join(',',$items))", "OUT_PATH=$($tOUT.Text)", "START_FRM=$($nFS.Value)", "END_FRM=$($nFE.Value)", "REBOOT=$isReboot", "SHUTDOWN_ACTION=$($comboShutdown.Text)", "SINGLE=$($cS.Checked)", "BATCH_MODE=$(if($rbAuto.Checked){'Auto'}else{'Manual'})", "OUT_TOGGLE=$($chkOutToggle.Checked)", "OUT_NAME_MODE=$(if($rbNameUSD.Checked){'USD'}else{'Custom'})", "OUT_NAME_BASE=$($tNameBase.Text)", "EXT=$($tExt.Text)", "PADDING=$($nPad.Value)", "RES_SCALE=$($trackRes.Value * 10)", "PIXEL_SAMPLES=$($nPS.Value)", "NOTIFY=$($comboNoti.Text)", "DISCORD_WEBHOOK=$($tWeb.Text)", "TIMEOUT_WARN=$($nTW.Value)", "TIMEOUT_KILL=$($nTK.Value)", "ENGINE_TYPE=$($comboEngine.Text)")
         $res | Set-Content $iniPath -Encoding Default
+        Save-UsdOverrides $usdOverrides $overridePath
     }
 })
 
-$btnRun = New-Object Windows.Forms.Button; $btnRun.Text="保存して開始"; $btnRun.Location="250,$($y + 210)"; $btnRun.Size="300,50"; $f.Controls.Add($btnRun)
 $btnRun.Add_Click({ $f.DialogResult = [Windows.Forms.DialogResult]::OK; $f.Close() })
 
 $tHOU.AllowDrop = $true
@@ -237,9 +552,21 @@ $tOUT.Add_DragDrop({
     }
 })
 
-$listUSD.AllowDrop = $true
-$listUSD.Add_DragEnter({ if ($_.Data.GetDataPresent([Windows.Forms.DataFormats]::FileDrop)) { $_.Effect = "Copy" } })
-$listUSD.Add_DragDrop({ $files = $_.Data.GetData([Windows.Forms.DataFormats]::FileDrop); foreach ($file in $files) { if ($file -match "\.usd[azc]?$") { [void]$listUSD.Items.Add($file) } }; & $updateControlState })
+$gridUSD.AllowDrop = $true
+$gridUSD.Add_DragEnter({ if ($_.Data.GetDataPresent([Windows.Forms.DataFormats]::FileDrop)) { $_.Effect = "Copy" } })
+$gridUSD.Add_DragDrop({
+    $files = $_.Data.GetData([Windows.Forms.DataFormats]::FileDrop)
+    foreach ($file in $files) {
+        if ($file -match "\.usd[azc]?$") {
+            $norm = Normalize-UsdPath $file
+            $ov = if($norm){ $usdOverrides[$norm] }else{ $null }
+            $fname = [System.IO.Path]::GetFileName($file)
+            [void]$gridUSD.Rows.Add($fname, (Get-RangeSummary $ov $conf), (Get-OutputSummary $ov $conf), (Get-StatusText $ov))
+            $gridUSD.Rows[$gridUSD.Rows.Count-1].Tag = $file
+        }
+    }
+    & $updateControlState
+})
 
 # --- 起動時の初期反映 ---
 & $updateControlState
