@@ -1,4 +1,4 @@
-$baseDir = Split-Path -Parent $PSScriptRoot
+﻿$baseDir = Split-Path -Parent $PSScriptRoot
 $iniPath = Join-Path $baseDir "config\settings.ini"
 $logDir = Join-Path $baseDir "log"
 if (!(Test-Path $logDir)) { New-Item -ItemType Directory $logDir | Out-Null }
@@ -96,7 +96,7 @@ foreach ($usdPath in $usdList) {
     Write-Host " Processing: $usdName" -ForegroundColor Cyan
     
     # --- 引数構築 ---
-    $argList = @("--verbose", "3", "--skip-licenses", "apprentice", "--make-output-path")
+    $argList = @("--verbose", "3", "--skip-licenses", "apprentice", "--make-output-path", "--timelimit-image", "--timelimit-nosave-partial")
     $renderOutDir = if($conf["OUT_TOGGLE"] -eq "True" -and $conf["OUT_PATH"]){ $conf["OUT_PATH"] } else { Split-Path -Parent $usdPath }
 
     if ($conf["BATCH_MODE"] -eq "Auto") {
@@ -118,12 +118,17 @@ foreach ($usdPath in $usdList) {
     }
     if ($conf["ENGINE_OVERRIDE"] -match "True") { $argList += @("--engine", $conf["ENGINE_TYPE"]) }
     if ($conf["RES_SCALE"] -and $conf["RES_SCALE"] -ne "100") { $argList += @("--res-scale", $conf["RES_SCALE"]) }
+    if ($conf.ContainsKey("PIXEL_SAMPLES") -and [int]$conf["PIXEL_SAMPLES"] -gt 0) { $argList += @("--pixel-samples", $conf["PIXEL_SAMPLES"]) }
+    $limitWarnMin = [int]$conf["TIMEOUT_WARN"]
+    $limitKillMin = [int]$conf["TIMEOUT_KILL"]
+    $timeLimitSec = if ($limitKillMin -gt 0) { [int]([double]$limitKillMin * 60) } else { -1 }
+    $argList += @("--timelimit", $timeLimitSec)
     $argList += $usdPath
 
     $startTime = Get-Date
     $warnSent = $false
-    $limitWarn = [int]$conf["TIMEOUT_WARN"]
-    $limitKill = [int]$conf["TIMEOUT_KILL"]
+    $limitWarn = $limitWarnMin
+    $limitKill = $limitKillMin
     $progress = "0.0%"
     $currentFrame = "---"
 
@@ -155,11 +160,6 @@ foreach ($usdPath in $usdList) {
             $warnSent = $true
         }
 
-        if ($limitKill -gt 0 -and $elapsed.TotalMinutes -ge $limitKill) {
-            Write-Host "`n[KILL] $limitKill 分の制限を超過したため処理を中断します。" -ForegroundColor Red
-            taskkill /F /IM husk.exe /T > $null 2>&1
-            return 
-        }
     }
 
     if ($LASTEXITCODE -eq 0) {

@@ -6,12 +6,17 @@ set "PS_GUI=%SCRIPT_DIR%\husk_gui.ps1"
 set "PS_LOG=%SCRIPT_DIR%\husk_logger.ps1"
 
 powershell -NoProfile -ExecutionPolicy Bypass -File "%PS_GUI%" -dropFile "%~1"
+set "GUI_EXIT=%ERRORLEVEL%"
 
-if %ERRORLEVEL% equ 0 (
+if %GUI_EXIT% equ 0 (
     :: 正常終了時はここ。pauseを書かないことで残像を防ぎます。
     powershell -NoProfile -ExecutionPolicy Bypass -File "%PS_LOG%"
     if %ERRORLEVEL% neq 0 pause
+) else if %GUI_EXIT% equ 2 (
+    :: ユーザーキャンセル（ダイアログクローズ）
+    echo [INFO] Render canceled by user.
 ) else (
-    :: キャンセルやエラー時のみ止める
-    echo [INFO] Render Canceled.
+    :: GUI実行エラー
+    echo [ERROR] GUI exited with code %GUI_EXIT%.
+    pause
 )

@@ -1,4 +1,4 @@
-param([string]$dropFile)
+﻿param([string]$dropFile)
 
 $baseDir = Split-Path -Parent $PSScriptRoot
 $configDir = Join-Path $baseDir "config"
@@ -10,7 +10,7 @@ $conf = @{
     USD_LIST=""; OUT_PATH=""; START_FRM="1"; END_FRM="1"; 
     REBOOT="False"; SHUTDOWN_ACTION="None"; SINGLE="False"; HOUDINI_BIN="C:\Program Files\Side Effects Software\Houdini 21.0.440\bin";
     BATCH_MODE="Auto"; OUT_TOGGLE="True"; OUT_NAME_MODE="USD"; OUT_NAME_BASE="render";
-    EXT="exr"; PADDING="4"; RES_SCALE="100"; NOTIFY="None"; DISCORD_WEBHOOK=""; TIMEOUT_WARN="0"; TIMEOUT_KILL="0";
+    EXT="exr"; PADDING="4"; RES_SCALE="100"; PIXEL_SAMPLES="0"; NOTIFY="None"; DISCORD_WEBHOOK=""; TIMEOUT_WARN="0"; TIMEOUT_KILL="0";
     ENGINE_OVERRIDE="False"; ENGINE_TYPE="cpu"
 }
 if (Test-Path $iniPath) {
@@ -87,20 +87,32 @@ $cS = New-Object Windows.Forms.CheckBox; $cS.Text="単一フレームのみレ�
 # --- Advanced Settings (右側) ---
 $advX = 500; $advY = 10
 $groupAdv = New-Object Windows.Forms.GroupBox; $groupAdv.Text="Advanced Settings"; $groupAdv.Location="$advX,$advY"; $groupAdv.Size="280,625"; $f.Controls.Add($groupAdv)
-$lRes = New-Object Windows.Forms.Label; $lRes.Text="Resolution Scale: $($conf['RES_SCALE'])%"; $lRes.Location="15,30"; $lRes.Width=200; $groupAdv.Controls.Add($lRes)
-$trackRes = New-Object Windows.Forms.TrackBar; $trackRes.Location="15,50"; $trackRes.Width=240; $trackRes.Minimum=1; $trackRes.Maximum=20; $trackRes.Value=[math]::Max(1,[int]([float]$conf["RES_SCALE"]/10)); $groupAdv.Controls.Add($trackRes)
-$lTW = New-Object Windows.Forms.Label; $lTW.Text="Warn Timeout (Min):"; $lTW.Location="15,110"; $groupAdv.Controls.Add($lTW)
-$nTW = New-Object Windows.Forms.NumericUpDown; $nTW.Location="15,135"; $nTW.Width=80; $nTW.Maximum=9999; $nTW.Value=[int]$conf["TIMEOUT_WARN"]; $groupAdv.Controls.Add($nTW)
-$lTK = New-Object Windows.Forms.Label; $lTK.Text="Kill Timeout (Min):"; $lTK.Location="15,180"; $groupAdv.Controls.Add($lTK)
-$nTK = New-Object Windows.Forms.NumericUpDown; $nTK.Location="15,205"; $nTK.Width=80; $nTK.Maximum=9999; $nTK.Value=[int]$conf["TIMEOUT_KILL"]; $groupAdv.Controls.Add($nTK)
-$lNo = New-Object Windows.Forms.Label; $lNo.Text="Notification:"; $lNo.Location="15,255"; $groupAdv.Controls.Add($lNo)
-$comboNoti = New-Object Windows.Forms.ComboBox; $comboNoti.Location="15,280"; $comboNoti.Width=220; $comboNoti.DropDownStyle="DropDownList"
-[void]$comboNoti.Items.AddRange(@("None", "Windows Toast", "Discord")); $comboNoti.Text=$conf["NOTIFY"]; $groupAdv.Controls.Add($comboNoti)
-$lWeb = New-Object Windows.Forms.Label; $lWeb.Text="Discord Webhook URL:"; $lWeb.Location="15,315"; $lWeb.Width=200; $groupAdv.Controls.Add($lWeb)
-$tWeb = New-Object Windows.Forms.TextBox; $tWeb.Text=$conf["DISCORD_WEBHOOK"]; $tWeb.Location="15,340"; $tWeb.Width=220; $groupAdv.Controls.Add($tWeb)
 
-$lShutdown = New-Object Windows.Forms.Label; $lShutdown.Text="完了後のアクション:"; $lShutdown.Location="15,375"; $lShutdown.Width=200; $groupAdv.Controls.Add($lShutdown)
-$comboShutdown = New-Object Windows.Forms.ComboBox; $comboShutdown.Location="15,400"; $comboShutdown.Width=220; $comboShutdown.DropDownStyle="DropDownList"
+# 1. Render Setting グループ
+$groupRender = New-Object Windows.Forms.GroupBox; $groupRender.Text="1. Render Setting"; $groupRender.Location="10,20"; $groupRender.Size="260,180"; $groupAdv.Controls.Add($groupRender)
+$lRes = New-Object Windows.Forms.Label; $lRes.Text="Resolution Scale: $($conf['RES_SCALE'])%"; $lRes.Location="10,20"; $lRes.Width=200; $groupRender.Controls.Add($lRes)
+$trackRes = New-Object Windows.Forms.TrackBar; $trackRes.Location="10,40"; $trackRes.Width=230; $trackRes.Minimum=1; $trackRes.Maximum=20; $trackRes.Value=[math]::Max(1,[int]([float]$conf["RES_SCALE"]/10)); $groupRender.Controls.Add($trackRes)
+$lPS = New-Object Windows.Forms.Label; $lPS.Text="Pixel Samples (0=Default):"; $lPS.Location="10,85"; $lPS.Width=200; $groupRender.Controls.Add($lPS)
+$nPS = New-Object Windows.Forms.NumericUpDown; $nPS.Location="10,105"; $nPS.Width=80; $nPS.Minimum=0; $nPS.Maximum=9999; $nPS.Value=[int]$conf["PIXEL_SAMPLES"]; $groupRender.Controls.Add($nPS)
+$chkEngine = New-Object Windows.Forms.CheckBox; $chkEngine.Text="Engine Override"; $chkEngine.Location="10,140"; $chkEngine.Width=150; $chkEngine.Checked = [System.Convert]::ToBoolean($conf["ENGINE_OVERRIDE"]); $groupRender.Controls.Add($chkEngine)
+$comboEngine = New-Object Windows.Forms.ComboBox; $comboEngine.Location="165,138"; $comboEngine.Width=70; $comboEngine.DropDownStyle="DropDownList"
+[void]$comboEngine.Items.AddRange(@("cpu", "xpu")); $comboEngine.Text=$conf["ENGINE_TYPE"]; $groupRender.Controls.Add($comboEngine)
+
+# 2. Timeout & Notification グループ
+$groupTimeout = New-Object Windows.Forms.GroupBox; $groupTimeout.Text="2. Timeout & Notification"; $groupTimeout.Location="10,210"; $groupTimeout.Size="260,245"; $groupAdv.Controls.Add($groupTimeout)
+$lTW = New-Object Windows.Forms.Label; $lTW.Text="Warn Timeout (Min, 0=Off):"; $lTW.Location="10,20"; $lTW.Width=200; $groupTimeout.Controls.Add($lTW)
+$nTW = New-Object Windows.Forms.NumericUpDown; $nTW.Location="10,40"; $nTW.Width=80; $nTW.Maximum=9999; $nTW.Value=[int]$conf["TIMEOUT_WARN"]; $groupTimeout.Controls.Add($nTW)
+$lTK = New-Object Windows.Forms.Label; $lTK.Text="Kill Timeout (Min, 0=Off):"; $lTK.Location="10,75"; $lTK.Width=200; $groupTimeout.Controls.Add($lTK)
+$nTK = New-Object Windows.Forms.NumericUpDown; $nTK.Location="10,95"; $nTK.Width=80; $nTK.Maximum=9999; $nTK.Value=[int]$conf["TIMEOUT_KILL"]; $groupTimeout.Controls.Add($nTK)
+$lNo = New-Object Windows.Forms.Label; $lNo.Text="Notification:"; $lNo.Location="10,130"; $lNo.Width=200; $groupTimeout.Controls.Add($lNo)
+$comboNoti = New-Object Windows.Forms.ComboBox; $comboNoti.Location="10,150"; $comboNoti.Width=220; $comboNoti.DropDownStyle="DropDownList"
+[void]$comboNoti.Items.AddRange(@("None", "Windows Toast", "Discord")); $comboNoti.Text=$conf["NOTIFY"]; $groupTimeout.Controls.Add($comboNoti)
+$lWeb = New-Object Windows.Forms.Label; $lWeb.Text="Discord Webhook URL:"; $lWeb.Location="10,180"; $lWeb.Width=200; $groupTimeout.Controls.Add($lWeb)
+$tWeb = New-Object Windows.Forms.TextBox; $tWeb.Text=$conf["DISCORD_WEBHOOK"]; $tWeb.Location="10,200"; $tWeb.Width=220; $groupTimeout.Controls.Add($tWeb)
+
+# 完了後のアクション
+$lShutdown = New-Object Windows.Forms.Label; $lShutdown.Text="完了後のアクション:"; $lShutdown.Location="15,470"; $lShutdown.Width=200; $groupAdv.Controls.Add($lShutdown)
+$comboShutdown = New-Object Windows.Forms.ComboBox; $comboShutdown.Location="15,490"; $comboShutdown.Width=220; $comboShutdown.DropDownStyle="DropDownList"
 [void]$comboShutdown.Items.AddRange(@("なし", "シャットダウン", "再起動", "ログオフ"))
 # 旧設定との互換性のため、REBOOTがTrueの場合は再起動を選択
 if ([System.Convert]::ToBoolean($conf["REBOOT"])) {
@@ -111,10 +123,6 @@ if ([System.Convert]::ToBoolean($conf["REBOOT"])) {
     $comboShutdown.Text = "なし"
 }
 $groupAdv.Controls.Add($comboShutdown)
-
-$chkEngine = New-Object Windows.Forms.CheckBox; $chkEngine.Text="Engineをオーバーライドする"; $chkEngine.Location="15,445"; $chkEngine.Width=220; $chkEngine.Checked = [System.Convert]::ToBoolean($conf["ENGINE_OVERRIDE"]); $groupAdv.Controls.Add($chkEngine)
-$comboEngine = New-Object Windows.Forms.ComboBox; $comboEngine.Location="15,470"; $comboEngine.Width=100; $comboEngine.DropDownStyle="DropDownList"
-[void]$comboEngine.Items.AddRange(@("cpu", "xpu")); $comboEngine.Text=$conf["ENGINE_TYPE"]; $groupAdv.Controls.Add($comboEngine)
 
 
 
@@ -156,7 +164,8 @@ $updateControlState = {
     }
     # カスタマイズトグルのグレーアウト連動
     $tOUT.Enabled = $rbNameUSD.Enabled = $rbNameCustom.Enabled = $tExt.Enabled = $nPad.Enabled = $chkOutToggle.Checked
-    $tWeb.Enabled = ($comboNoti.Text -eq "Discord")
+    $lWeb.Visible = ($comboNoti.Text -eq "Discord")
+    $tWeb.Visible = ($comboNoti.Text -eq "Discord")
     $comboEngine.Enabled = $chkEngine.Checked
     
     if ($cS.Checked) { $nFE.Value = $nFS.Value }
@@ -194,7 +203,7 @@ $f.Add_FormClosing({
     if ($f.DialogResult -eq [Windows.Forms.DialogResult]::OK) {
         $items = if($listUSD.Items){ $listUSD.Items | ForEach-Object { $_.ToString() } } else { @() }
         $isReboot = ($comboShutdown.Text -eq "再起動")
-        $res = @("HOUDINI_BIN=$($tHOU.Text)", "USD_LIST=$([string]::Join(',',$items))", "OUT_PATH=$($tOUT.Text)", "START_FRM=$($nFS.Value)", "END_FRM=$($nFE.Value)", "REBOOT=$isReboot", "SHUTDOWN_ACTION=$($comboShutdown.Text)", "SINGLE=$($cS.Checked)", "BATCH_MODE=$(if($rbAuto.Checked){'Auto'}else{'Manual'})", "OUT_TOGGLE=$($chkOutToggle.Checked)", "OUT_NAME_MODE=$(if($rbNameUSD.Checked){'USD'}else{'Custom'})", "OUT_NAME_BASE=$($tNameBase.Text)", "EXT=$($tExt.Text)", "PADDING=$($nPad.Value)", "RES_SCALE=$($trackRes.Value * 10)", "NOTIFY=$($comboNoti.Text)", "DISCORD_WEBHOOK=$($tWeb.Text)", "TIMEOUT_WARN=$($nTW.Value)", "TIMEOUT_KILL=$($nTK.Value)", "ENGINE_OVERRIDE=$($chkEngine.Checked)", "ENGINE_TYPE=$($comboEngine.Text)")
+        $res = @("HOUDINI_BIN=$($tHOU.Text)", "USD_LIST=$([string]::Join(',',$items))", "OUT_PATH=$($tOUT.Text)", "START_FRM=$($nFS.Value)", "END_FRM=$($nFE.Value)", "REBOOT=$isReboot", "SHUTDOWN_ACTION=$($comboShutdown.Text)", "SINGLE=$($cS.Checked)", "BATCH_MODE=$(if($rbAuto.Checked){'Auto'}else{'Manual'})", "OUT_TOGGLE=$($chkOutToggle.Checked)", "OUT_NAME_MODE=$(if($rbNameUSD.Checked){'USD'}else{'Custom'})", "OUT_NAME_BASE=$($tNameBase.Text)", "EXT=$($tExt.Text)", "PADDING=$($nPad.Value)", "RES_SCALE=$($trackRes.Value * 10)", "PIXEL_SAMPLES=$($nPS.Value)", "NOTIFY=$($comboNoti.Text)", "DISCORD_WEBHOOK=$($tWeb.Text)", "TIMEOUT_WARN=$($nTW.Value)", "TIMEOUT_KILL=$($nTK.Value)", "ENGINE_OVERRIDE=$($chkEngine.Checked)", "ENGINE_TYPE=$($comboEngine.Text)")
         $res | Set-Content $iniPath -Encoding Default
     }
 })
@@ -241,3 +250,4 @@ $listUSD.Add_DragDrop({ $files = $_.Data.GetData([Windows.Forms.DataFormats]::Fi
 $result = $f.ShowDialog()
 if ($result -ne [Windows.Forms.DialogResult]::OK) { exit 2 }
 exit 0
+
