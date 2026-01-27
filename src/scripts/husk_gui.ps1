@@ -11,7 +11,7 @@ $conf = @{
     REBOOT="False"; SHUTDOWN_ACTION="None"; SINGLE="False"; HOUDINI_BIN="C:\Program Files\Side Effects Software\Houdini 21.0.440\bin";
     BATCH_MODE="Auto"; OUT_TOGGLE="True"; OUT_NAME_MODE="USD"; OUT_NAME_BASE="render";
     EXT="exr"; PADDING="4"; RES_SCALE="100"; PIXEL_SAMPLES="0"; NOTIFY="None"; DISCORD_WEBHOOK=""; TIMEOUT_WARN="0"; TIMEOUT_KILL="0";
-    ENGINE_OVERRIDE="False"; ENGINE_TYPE="cpu"
+    ENGINE_TYPE="cpu"
 }
 if (Test-Path $iniPath) {
     Get-Content $iniPath | ForEach-Object {
@@ -94,8 +94,8 @@ $lRes = New-Object Windows.Forms.Label; $lRes.Text="Resolution Scale: $($conf['R
 $trackRes = New-Object Windows.Forms.TrackBar; $trackRes.Location="10,40"; $trackRes.Width=230; $trackRes.Minimum=1; $trackRes.Maximum=20; $trackRes.Value=[math]::Max(1,[int]([float]$conf["RES_SCALE"]/10)); $groupRender.Controls.Add($trackRes)
 $lPS = New-Object Windows.Forms.Label; $lPS.Text="Pixel Samples (0=Default):"; $lPS.Location="10,85"; $lPS.Width=200; $groupRender.Controls.Add($lPS)
 $nPS = New-Object Windows.Forms.NumericUpDown; $nPS.Location="10,105"; $nPS.Width=80; $nPS.Minimum=0; $nPS.Maximum=9999; $nPS.Value=[int]$conf["PIXEL_SAMPLES"]; $groupRender.Controls.Add($nPS)
-$chkEngine = New-Object Windows.Forms.CheckBox; $chkEngine.Text="Engine Override"; $chkEngine.Location="10,140"; $chkEngine.Width=150; $chkEngine.Checked = [System.Convert]::ToBoolean($conf["ENGINE_OVERRIDE"]); $groupRender.Controls.Add($chkEngine)
-$comboEngine = New-Object Windows.Forms.ComboBox; $comboEngine.Location="165,138"; $comboEngine.Width=70; $comboEngine.DropDownStyle="DropDownList"
+$lEngine = New-Object Windows.Forms.Label; $lEngine.Text="Engine:"; $lEngine.Location="10,140"; $lEngine.Width=80; $groupRender.Controls.Add($lEngine)
+$comboEngine = New-Object Windows.Forms.ComboBox; $comboEngine.Location="90,138"; $comboEngine.Width=70; $comboEngine.DropDownStyle="DropDownList"
 [void]$comboEngine.Items.AddRange(@("cpu", "xpu")); $comboEngine.Text=$conf["ENGINE_TYPE"]; $groupRender.Controls.Add($comboEngine)
 
 # 2. Timeout & Notification グループ
@@ -166,7 +166,6 @@ $updateControlState = {
     $tOUT.Enabled = $rbNameUSD.Enabled = $rbNameCustom.Enabled = $tExt.Enabled = $nPad.Enabled = $chkOutToggle.Checked
     $lWeb.Visible = ($comboNoti.Text -eq "Discord")
     $tWeb.Visible = ($comboNoti.Text -eq "Discord")
-    $comboEngine.Enabled = $chkEngine.Checked
     
     if ($cS.Checked) { $nFE.Value = $nFS.Value }
     & $updatePreview
@@ -196,14 +195,13 @@ $rbAuto.Add_CheckedChanged({ & $updateControlState })
 $rbManual.Add_CheckedChanged({ & $updateControlState })
 $cS.Add_CheckedChanged({ & $updateControlState })
 $comboNoti.Add_SelectedIndexChanged({ & $updateControlState })
-$chkEngine.Add_CheckedChanged({ & $updateControlState })
 
 # --- 保存処理をClosingイベントに集約 ---
 $f.Add_FormClosing({
     if ($f.DialogResult -eq [Windows.Forms.DialogResult]::OK) {
         $items = if($listUSD.Items){ $listUSD.Items | ForEach-Object { $_.ToString() } } else { @() }
         $isReboot = ($comboShutdown.Text -eq "再起動")
-        $res = @("HOUDINI_BIN=$($tHOU.Text)", "USD_LIST=$([string]::Join(',',$items))", "OUT_PATH=$($tOUT.Text)", "START_FRM=$($nFS.Value)", "END_FRM=$($nFE.Value)", "REBOOT=$isReboot", "SHUTDOWN_ACTION=$($comboShutdown.Text)", "SINGLE=$($cS.Checked)", "BATCH_MODE=$(if($rbAuto.Checked){'Auto'}else{'Manual'})", "OUT_TOGGLE=$($chkOutToggle.Checked)", "OUT_NAME_MODE=$(if($rbNameUSD.Checked){'USD'}else{'Custom'})", "OUT_NAME_BASE=$($tNameBase.Text)", "EXT=$($tExt.Text)", "PADDING=$($nPad.Value)", "RES_SCALE=$($trackRes.Value * 10)", "PIXEL_SAMPLES=$($nPS.Value)", "NOTIFY=$($comboNoti.Text)", "DISCORD_WEBHOOK=$($tWeb.Text)", "TIMEOUT_WARN=$($nTW.Value)", "TIMEOUT_KILL=$($nTK.Value)", "ENGINE_OVERRIDE=$($chkEngine.Checked)", "ENGINE_TYPE=$($comboEngine.Text)")
+        $res = @("HOUDINI_BIN=$($tHOU.Text)", "USD_LIST=$([string]::Join(',',$items))", "OUT_PATH=$($tOUT.Text)", "START_FRM=$($nFS.Value)", "END_FRM=$($nFE.Value)", "REBOOT=$isReboot", "SHUTDOWN_ACTION=$($comboShutdown.Text)", "SINGLE=$($cS.Checked)", "BATCH_MODE=$(if($rbAuto.Checked){'Auto'}else{'Manual'})", "OUT_TOGGLE=$($chkOutToggle.Checked)", "OUT_NAME_MODE=$(if($rbNameUSD.Checked){'USD'}else{'Custom'})", "OUT_NAME_BASE=$($tNameBase.Text)", "EXT=$($tExt.Text)", "PADDING=$($nPad.Value)", "RES_SCALE=$($trackRes.Value * 10)", "PIXEL_SAMPLES=$($nPS.Value)", "NOTIFY=$($comboNoti.Text)", "DISCORD_WEBHOOK=$($tWeb.Text)", "TIMEOUT_WARN=$($nTW.Value)", "TIMEOUT_KILL=$($nTK.Value)", "ENGINE_TYPE=$($comboEngine.Text)")
         $res | Set-Content $iniPath -Encoding Default
     }
 })

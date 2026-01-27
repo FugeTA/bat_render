@@ -42,11 +42,16 @@ function Send-DiscordNotification {
             description = $message
             color = $color
         })
-    } | ConvertTo-Json
+    }
+    
     try {
-        Invoke-RestMethod -Uri $url -Method Post -Body $payload -ContentType "application/json"
+        $jsonBody = $payload | ConvertTo-Json -Depth 10 -Compress
+        $utf8 = New-Object System.Text.UTF8Encoding $false
+        $bodyBytes = $utf8.GetBytes($jsonBody)
+        
+        Invoke-RestMethod -Uri $url -Method Post -Body $bodyBytes -ContentType "application/json; charset=utf-8"
     } catch {
-        Write-Host "[!] Discord通知の送信に失敗しました。" -ForegroundColor Yellow
+        Write-Host "[!] Discord通知の送信に失敗しました: $($_.Exception.Message)" -ForegroundColor Yellow
     }
 }
 
@@ -83,10 +88,12 @@ $env:Path = $conf["HOUDINI_BIN"] + ";" + $env:Path
 $usdList = if($conf["USD_LIST"]){ $conf["USD_LIST"].Split(",") | Where-Object { $_ -ne "" } } else { @() }
 if ($usdList.Count -eq 0) { Write-Host "[ERROR] 対象USDがありません。" -ForegroundColor Red; Read-Host "Enterキーを押して終了します..."; exit 1 }
 
-$logFile = Join-Path $logDir ("render_" + (Get-Date -Format 'yyyyMMdd_HHmm') + ".log")
+$pcName = $env:COMPUTERNAME
+$logFile = Join-Path $logDir ("$pcName`_" + (Get-Date -Format 'yyyyMMdd_HHmm') + ".log")
 $lastSavedDir = "" # フォルダオープン用に初期化
 $successCount = 0
 $failCount = 0
+$renderedFiles = @() # レンダリングしたファイル情報を保存
 Write-Host "[START] Husk Batch Rendering" -ForegroundColor Cyan
 
 foreach ($usdPath in $usdList) {
@@ -98,25 +105,34 @@ foreach ($usdPath in $usdList) {
     # --- 引数構築 ---
     $argList = @("--verbose", "3", "--skip-licenses", "apprentice", "--make-output-path", "--timelimit-image", "--timelimit-nosave-partial")
     $renderOutDir = if($conf["OUT_TOGGLE"] -eq "True" -and $conf["OUT_PATH"]){ $conf["OUT_PATH"] } else { Split-Path -Parent $usdPath }
-
+    
+    $frameStart = 1
+    $frameEnd = 1
     if ($conf["BATCH_MODE"] -eq "Auto") {
         # 各ファイルごとにhythonで解析
         $range = Get-USDFrameRange $usdPath $conf["HOUDINI_BIN"]
         if ($range) {
-            $count = [int]$range.end - [int]$range.start + 1
-            $argList += @("-f", $range.start, "-n", ([math]::Max(1, $count)))
-            Write-Host "  Detected Range: $($range.start) to $($range.end)" -ForegroundColor Gray
+            $frameStart = [int]$range.start
+            $frameEnd = [int]$range.end
+            $count = $frameEnd - $frameStart + 1
+            $argList += @("-f", $frameStart, "-n", ([math]::Max(1, $count)))
         }
     } elseif ($conf["BATCH_MODE"] -eq "Manual") {
-        $count = [int]$conf["END_FRM"] - [int]$conf["START_FRM"] + 1
-        $argList += @("-f", $conf["START_FRM"], "-n", ([math]::Max(1, $count)))
+        $frameStart = [int]$conf["START_FRM"]
+        $frameEnd = [int]$conf["END_FRM"]
+        $count = $frameEnd - $frameStart + 1
+        $argList += @("-f", $frameStart, "-n", ([math]::Max(1, $count)))
     }
+    
+    # フレームレンジを表示
+    Write-Host "  Frame Range: $frameStart - $frameEnd ($($frameEnd - $frameStart + 1) frames)" -ForegroundColor Gray
+    
     if ($conf["OUT_TOGGLE"] -eq "True") {
         $baseName = if($conf["OUT_NAME_MODE"] -eq "USD"){ $usdName } else { $conf["OUT_NAME_BASE"] }
         $fullOutPath = Join-Path $renderOutDir "$baseName.`$F$($conf['PADDING']).$($conf['EXT'].TrimStart('.'))"
         $argList += @("--output", $fullOutPath)
     }
-    if ($conf["ENGINE_OVERRIDE"] -match "True") { $argList += @("--engine", $conf["ENGINE_TYPE"]) }
+    if ($conf.ContainsKey("ENGINE_TYPE")) { $argList += @("--engine", $conf["ENGINE_TYPE"]) }
     if ($conf["RES_SCALE"] -and $conf["RES_SCALE"] -ne "100") { $argList += @("--res-scale", $conf["RES_SCALE"]) }
     if ($conf.ContainsKey("PIXEL_SAMPLES") -and [int]$conf["PIXEL_SAMPLES"] -gt 0) { $argList += @("--pixel-samples", $conf["PIXEL_SAMPLES"]) }
     $limitWarnMin = [int]$conf["TIMEOUT_WARN"]
@@ -165,58 +181,93 @@ foreach ($usdPath in $usdList) {
     if ($LASTEXITCODE -eq 0) {
         Write-Host "`n[COMPLETE] $usdName (Total: $timeStr)" -ForegroundColor Green
         $successCount++
+        $renderedFiles += "$usdName ($frameStart-$frameEnd)"
         if (!$lastSavedDir) { $lastSavedDir = $renderOutDir }
     } else {
         $errMsg = "USD: $usdName のレンダリング中にエラーが発生しました (ExitCode: $LASTEXITCODE)"
         Write-Host "`n[ERROR] $errMsg" -ForegroundColor Red
-        if ($conf["NOTIFY"] -eq "Discord") { Send-DiscordNotification -url $conf["DISCORD_WEBHOOK"] -title "Husk Render Error" -message $errMsg -color 15158332 }
+        if ($conf["NOTIFY"] -eq "Discord") { Send-DiscordNotification -url $conf["DISCORD_WEBHOOK"] -title "Husk Render Error" -message "@everyone $errMsg" -color 15158332 }
         $failCount++
     }
 }
 
 # --- 終了後の処理 ---
 $summary = "完了: $successCount 件 / 失敗: $failCount 件"
+$detailMsg = "PC: $pcName`n完了: $successCount 件 / 失敗: $failCount 件"
+if ($renderedFiles.Count -gt 0) {
+    $detailMsg += "`n`nレンダリング完了:" + ($renderedFiles -join "`n")
+}
+
 Write-Host ("`n" + ("=" * 80)) -ForegroundColor Green
 Write-Host "  ALL JOBS FINISHED ($summary)" -ForegroundColor Green
 Write-Host ("=" * 80) -ForegroundColor Green
 
 if ($conf["NOTIFY"] -eq "Windows Toast") {
-    Send-WindowsToast -title "Husk Render Finished" -message $summary
+    Send-WindowsToast -title "Husk Render Finished" -message $detailMsg
 }
 elseif ($conf["NOTIFY"] -eq "Discord") {
-    Send-DiscordNotification -url $conf["DISCORD_WEBHOOK"] -title "Husk Render Finished" -message $summary
+    Send-DiscordNotification -url $conf["DISCORD_WEBHOOK"] -title "Husk Render Finished" -message "@everyone $detailMsg"
 }
 
-# 再起動処理
-if ($conf["REBOOT"] -eq "True") {
-    Write-Host "[SYSTEM] 30秒後に再起動します。中止するにはキーを押してください..." -ForegroundColor Red
-    for ($i = 30; $i -gt 0; $i--) {
-        Write-Host -NoNewline "`rCountdown: $i  "
-        if ($Host.UI.RawUI.KeyAvailable) {
-            $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
-            Write-Host "`n[CANCEL] 再起動は中止されました。" -ForegroundColor Cyan
-            $conf["REBOOT"] = "False"; break
-        }
-        Start-Sleep -Seconds 1
+if ($conf["NOTIFY"] -eq "Windows Toast") {
+    Send-WindowsToast -title "Husk Render Finished" -message $detailMsg
+}
+elseif ($conf["NOTIFY"] -eq "Discord") {
+    Send-DiscordNotification -url $conf["DISCORD_WEBHOOK"] -title "Husk Render Finished" -message "@everyone $detailMsg"
+}
+
+# 完了後のアクション処理
+$actionToPerform = $null
+if ($conf.ContainsKey("SHUTDOWN_ACTION")) {
+    $actionToPerform = $conf["SHUTDOWN_ACTION"]
+} elseif ($conf["REBOOT"] -eq "True") {
+    $actionToPerform = "再起動"
+}
+
+if ($actionToPerform -and $actionToPerform -ne "なし" -and $actionToPerform -ne "None") {
+    $actionName = switch ($actionToPerform) {
+        "シャットダウン" { "シャットダウン"; break }
+        "再起動" { "再起動"; break }
+        "ログオフ" { "ログオフ"; break }
+        default { $null }
     }
-    # 完了後のアクション処理
-    if ($conf.ContainsKey("SHUTDOWN_ACTION")) {
-        switch ($conf["SHUTDOWN_ACTION"]) {
-            "シャットダウン" { shutdown /s /t 5; exit }
-            "再起動" { shutdown /r /t 5; exit }
-            "ログオフ" { shutdown /l; exit }
+    
+    if ($actionName) {
+        Write-Host "`n[SYSTEM] 30秒後に$actionName`します。中止するにはキーを押してください..." -ForegroundColor Red
+        $cancelled = $false
+        for ($i = 30; $i -gt 0; $i--) {
+            Write-Host -NoNewline "`rCountdown: $i  "
+            if ($Host.UI.RawUI.KeyAvailable) {
+                $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+                Write-Host "`n[CANCEL] $actionName`は中止されました。" -ForegroundColor Cyan
+                $cancelled = $true
+                break
+            }
+            Start-Sleep -Seconds 1
         }
-    } elseif ($conf["REBOOT"] -eq "True") {
-        # 旧設定との互換性
-        shutdown /r /t 5; exit
+        
+        if (-not $cancelled) {
+            Write-Host "`n[$actionName] 実行します..." -ForegroundColor Yellow
+            switch ($actionToPerform) {
+                "シャットダウン" { shutdown /s /t 5 }
+                "再起動" { shutdown /r /t 5 }
+                "ログオフ" { shutdown /l }
+            }
+            Start-Sleep -Seconds 2
+            exit
+        }
     }
 }
 
 # --- メニュー処理 ---
 $skipMenu = $false
-if ($conf.ContainsKey("SHUTDOWN_ACTION") -and $conf["SHUTDOWN_ACTION"] -ne "なし") {
-    $skipMenu = $true
-} elseif ($conf["REBOOT"] -eq "True") {
+if ($conf.ContainsKey("SHUTDOWN_ACTION")) {
+    $action = $conf["SHUTDOWN_ACTION"]
+    if ($action -eq "シャットダウン" -or $action -eq "再起動" -or $action -eq "ログオフ") {
+        $skipMenu = $true
+    }
+}
+if ($conf["REBOOT"] -eq "True") {
     $skipMenu = $true
 }
 
