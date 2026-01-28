@@ -1,28 +1,16 @@
-﻿$baseDir = Split-Path -Parent $PSScriptRoot
+﻿# 共通ユーティリティモジュールをインポート
+Import-Module (Join-Path $PSScriptRoot "husk_utils.psm1") -Force
+# 通知モジュールをインポート
+Import-Module (Join-Path $PSScriptRoot "husk_notifier.psm1") -Force
+# ログモジュールをインポート
+Import-Module (Join-Path $PSScriptRoot "husk_logging.psm1") -Force
+
+$baseDir = Split-Path -Parent $PSScriptRoot
 $iniPath = Join-Path $baseDir "config\settings.ini"
 $overridePath = Join-Path $baseDir "config\usd_overrides.xml"
 $logDir = Join-Path $baseDir "log"
-if (!(Test-Path $logDir)) { New-Item -ItemType Directory $logDir | Out-Null }
 
 # --- ユーティリティ ---
-function Normalize-UsdPath {
-    param([string]$path)
-    if ([string]::IsNullOrWhiteSpace($path)) { return $null }
-    try { return (Resolve-Path $path -ErrorAction Stop).ProviderPath } catch { return $path }
-}
-
-function Load-UsdOverrides {
-    param([string]$path)
-    $map = @{}
-    if (!(Test-Path $path)) { return $map }
-    try {
-        $map = Import-Clixml -Path $path -ErrorAction Stop
-        if (-not $map) { $map = @{} }
-    } catch {
-        Write-Host "[WARN] USD overrideファイルの読み込みに失敗しました: $($_.Exception.Message)" -ForegroundColor Yellow
-    }
-    return $map
-}
 
 function Convert-RangePairs {
     param($ranges)
@@ -64,7 +52,7 @@ function Get-DefaultRanges {
 
 function Build-RenderJobPlan {
     param([string]$usdPath, $conf, $override)
-    $fullPath = Normalize-UsdPath $usdPath
+    $fullPath = Resolve-UsdPath $usdPath
     $usdName = [System.IO.Path]::GetFileNameWithoutExtension($fullPath)
 
     # オーバーライドから値を取得するヘルパー関数（存在すればオーバーライド、なければconf）
@@ -127,79 +115,9 @@ function Build-RenderJobPlan {
     }
 }
 
-# --- 通知用関数の定義 ---
-function Send-WindowsToast {
-    param([string]$title, [string]$message)
-    
-    try {
-        # WinRTのアセンブリをより確実にロードする
-        $null = [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime]
-        $null = [Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime]
-    } catch {
-        # 上記で失敗する場合のフォールバック（型を直接指定してロードを試みる）
-        Add-Type -AssemblyName "System.Runtime.WindowsRuntime"
-    }
-
-    # 通知のXMLテンプレート作成
-    $xml = "<toast><visual><binding template='ToastGeneric'><text>$title</text><text>$message</text></binding></visual></toast>"
-    $toastXml = New-Object Windows.Data.Xml.Dom.XmlDocument
-    $toastXml.LoadXml($xml)
-
-    # OS標準のAppIDを使用して送信
-    $toast = New-Object Windows.UI.Notifications.ToastNotification $toastXml
-    $appId = "{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe"
-    
-    try {
-        [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($appId).Show($toast)
-    } catch {
-        Write-Host "[!] 通知の送信に失敗しました: $($_.Exception.Message)" -ForegroundColor Yellow
-    }
-}
-
-function Send-DiscordNotification {
-    param([string]$url, [string]$title, [string]$message, [int]$color = 5814783)
-    if ([string]::IsNullOrWhiteSpace($url)) { return }
-    
-    $payload = @{
-        embeds = @(@{
-            title = $title
-            description = $message
-            color = $color
-        })
-    }
-    
-    try {
-        $jsonBody = $payload | ConvertTo-Json -Depth 10 -Compress
-        $utf8 = New-Object System.Text.UTF8Encoding $false
-        $bodyBytes = $utf8.GetBytes($jsonBody)
-        
-        Invoke-RestMethod -Uri $url -Method Post -Body $bodyBytes -ContentType "application/json; charset=utf-8"
-    } catch {
-        Write-Host "[!] Discord通知の送信に失敗しました: $($_.Exception.Message)" -ForegroundColor Yellow
-    }
-}
-
-function Get-USDFrameRange {
-    param($usdPath, $houBin)
-    $hythonExe = Join-Path $houBin "hython.exe"
-    if (!(Test-Path $hythonExe)) { return $null }
-    # USDのStageを開いてStartTimeとEndTimeを取得するPythonコード
-    $pyCode = "from pxr import Usd; stage = Usd.Stage.Open('$($usdPath.Replace('\','/'))'); print(f'START:{stage.GetStartTimeCode()} END:{stage.GetEndTimeCode()}')"
-    try {
-        $out = & "$hythonExe" -c "$pyCode" 2>$null
-        if ($out -match "START:([-?\d\.]+) END:([-?\d\.]+)") {
-            return @{ start = [math]::Floor([double]$matches[1]); end = [math]::Floor([double]$matches[2]) }
-        }
-    } catch {}
-    return $null
-}
-
 # 1. 設定の読み込み
-$conf = @{}
-if (Test-Path $iniPath) {
-    Get-Content $iniPath | ForEach-Object { if($_ -match "^([^=]+)=(.*)$") { $conf[$matches[1].Trim()]=$matches[2].Trim() } }
-}
-$usdOverrides = Load-UsdOverrides $overridePath
+$conf = Import-ConfigIni $iniPath
+$usdOverrides = Import-UsdOverrides $overridePath
 
 # Houdiniのパスを通す
 $huskExe = Join-Path $conf["HOUDINI_BIN"] "husk.exe"
@@ -214,7 +132,7 @@ $usdList = if($conf["USD_LIST"]){ $conf["USD_LIST"].Split(",") | Where-Object { 
 if ($usdList.Count -eq 0) { Write-Host "[ERROR] 対象USDがありません。" -ForegroundColor Red; Read-Host "Enterキーを押して終了します..."; exit 1 }
 
 $pcName = $env:COMPUTERNAME
-$logFile = Join-Path $logDir ("$pcName`_" + (Get-Date -Format 'yyyyMMdd_HHmm') + ".log")
+$logFile = Initialize-RenderLog $logDir $pcName
 $lastSavedDir = "" # フォルダオープン用に初期化
 $successCount = 0
 $failCount = 0
@@ -234,7 +152,7 @@ foreach ($usdPath in $usdList) {
         Write-Host "  解析中: $usdFileName" -ForegroundColor DarkGray -NoNewline
     }
     
-    $normalized = Normalize-UsdPath $usdPath
+    $normalized = Resolve-UsdPath $usdPath
     $override = $usdOverrides[$normalized]
     $plan = Build-RenderJobPlan $usdPath $conf $override
     $totalRenderCount += $plan.Ranges.Count
@@ -248,32 +166,26 @@ if ($isAutoMode) {
     Write-Host "解析完了`n" -ForegroundColor Green
 }
 
-Write-Host "[START] Husk Batch Rendering" -ForegroundColor Cyan
-Write-Host "総レンダリング回数: $totalRenderCount" -ForegroundColor Cyan
-Write-Host ("="*80) -ForegroundColor Cyan
-Write-Host "レンダリング対象:" -ForegroundColor Yellow
-
-"[START] Husk Batch Rendering" | Out-File $logFile -Append -Encoding utf8
-"総レンダリング回数: $totalRenderCount" | Out-File $logFile -Append -Encoding utf8
-("="*80) | Out-File $logFile -Append -Encoding utf8
-"レンダリング対象:" | Out-File $logFile -Append -Encoding utf8
+Write-RenderLog "[START] Husk Batch Rendering" $logFile "Cyan"
+Write-RenderLog "総レンダリング回数: $totalRenderCount" $logFile "Cyan"
+Write-RenderLog ("="*80) $logFile "Cyan"
+Write-RenderLog "レンダリング対象:" $logFile "Yellow"
 
 foreach ($plan in $renderPlans) {
     $rangeTexts = $plan.Ranges | ForEach-Object {
         if ($_.start -eq $_.end) { "($($_.start))" } else { "($($_.start)-$($_.end))" }
     }
     $rangeStr = $rangeTexts -join ","
-    Write-Host "  $($plan.Name).usd $rangeStr" -ForegroundColor Gray
-    "  $($plan.Name).usd $rangeStr" | Out-File $logFile -Append -Encoding utf8
+    Write-RenderLog "  $($plan.Name).usd $rangeStr" $logFile "Gray"
 }
-("="*80) | Out-File $logFile -Append -Encoding utf8
+Write-LogOnly ("="*80) $logFile
 
 
 $currentRenderIndex = 0
 foreach ($usdPath in $usdList) {
     if (!(Test-Path $usdPath)) { Write-Host "[WARN] USDが見つかりません: $usdPath" -ForegroundColor Yellow; continue }
 
-    $normalized = Normalize-UsdPath $usdPath
+    $normalized = Resolve-UsdPath $usdPath
     $override = $usdOverrides[$normalized]
     $plan = Build-RenderJobPlan $usdPath $conf $override
     $usdName = $plan.Name
@@ -281,10 +193,7 @@ foreach ($usdPath in $usdList) {
     Write-Host ("="*80) -ForegroundColor Cyan
     Write-Host " Processing: $usdName" -ForegroundColor Cyan
     
-    "" | Out-File $logFile -Append -Encoding utf8
-    ("="*80) | Out-File $logFile -Append -Encoding utf8
-    " Processing: $usdName" | Out-File $logFile -Append -Encoding utf8
-    ("="*80) | Out-File $logFile -Append -Encoding utf8
+    Write-LogBatch -messages @("", ("="*80), " Processing: $usdName", ("="*80)) -logFile $logFile
 
     foreach ($range in $plan.Ranges) {
         $currentRenderIndex++
@@ -297,17 +206,12 @@ foreach ($usdPath in $usdList) {
         Write-Host "  [$currentRenderIndex/$totalRenderCount] Frame Range: $frameStart - $frameEnd ($frameCount frames)" -ForegroundColor White
         Write-Host ("  " + "-"*76) -ForegroundColor DarkCyan
         
-        "" | Out-File $logFile -Append -Encoding utf8
-        ("  " + "-"*76) | Out-File $logFile -Append -Encoding utf8
-        "  [$currentRenderIndex/$totalRenderCount] Frame Range: $frameStart - $frameEnd ($frameCount frames)" | Out-File $logFile -Append -Encoding utf8
-        ("  " + "-"*76) | Out-File $logFile -Append -Encoding utf8
+        Write-LogBatch -messages @("", ("  " + "-"*76), "  [$currentRenderIndex/$totalRenderCount] Frame Range: $frameStart - $frameEnd ($frameCount frames)", ("  " + "-"*76)) -logFile $logFile
         
         # レンダリング開始通知
         $startMsg = "レンダリング開始 [$currentRenderIndex/$totalRenderCount]: $pcName, $usdName ($frameStart-$frameEnd)"
-        Write-Host "  [START] $startMsg" -ForegroundColor Yellow
-        "  [START] $startMsg" | Out-File $logFile -Append -Encoding utf8
-        if ($plan.Notify -eq "Windows Toast") { Send-WindowsToast -title "Husk Render Started" -message $startMsg }
-        elseif ($plan.Notify -eq "Discord") { Send-DiscordNotification -url $plan.DiscordWebhook -title "Husk Render Started" -message $startMsg -color 3447003 }
+        Write-RenderLog "  [START] $startMsg" $logFile "Yellow"
+        Send-Notification $plan.Notify "Husk Render Started" $startMsg $plan.DiscordWebhook 3447003
 
         # --- 引数構築 ---
         $argList = @("--verbose", "3", "--skip-licenses", "apprentice", "--make-output-path", "--timelimit-image", "--timelimit-nosave-partial")
@@ -344,11 +248,11 @@ foreach ($usdPath in $usdList) {
 
         # --- husk実行と監視 ---
         $fullCmd = "`"$huskExe`" " + (($argList | ForEach-Object { if ($_ -match ' ') { "`"$_`"" } else { $_ } }) -join " ")
-        "[COMMAND] $fullCmd" | Out-File $logFile -Append -Encoding utf8
+        Write-LogOnly "[COMMAND] $fullCmd" $logFile
 
         & "$huskExe" @argList 2>&1 | ForEach-Object {
             $line = $_.ToString()
-            $line | Out-File $logFile -Append -Encoding utf8
+            Write-LogOnly $line $logFile
 
             $elapsed = (Get-Date) - $startTime
             $timeStr = "{0:D2}:{1:D2}:{2:D2}" -f $elapsed.Hours, $elapsed.Minutes, $elapsed.Seconds
@@ -363,22 +267,21 @@ foreach ($usdPath in $usdList) {
 
             if ($limitWarn -gt 0 -and $elapsed.TotalMinutes -ge $limitWarn -and -not $warnSent) {
                 $msg = "USD: $usdName ($frameStart-$frameEnd) が制限時間 ($limitWarn 分) を超過しました。"
-                Write-Host "`n[WARN] $msg" -ForegroundColor Yellow
-                if ($plan.Notify -eq "Windows Toast") { Send-WindowsToast -title "Husk Render Warning" -message $msg }
-                elseif ($plan.Notify -eq "Discord") { Send-DiscordNotification -url $plan.DiscordWebhook -title "Husk Render Warning" -message $msg }
+                Write-RenderLog "`n[WARN] $msg" $logFile "Yellow"
+                Send-Notification $plan.Notify "Husk Render Warning" $msg $plan.DiscordWebhook
                 $warnSent = $true
             }
         }
 
         if ($LASTEXITCODE -eq 0) {
-            Write-Host "`n[COMPLETE] $usdName ($frameStart-$frameEnd) (Total: $timeStr)" -ForegroundColor Green
+            Write-RenderLog "`n[COMPLETE] $usdName ($frameStart-$frameEnd) (Total: $timeStr)" $logFile "Green"
             $successCount++
             $renderedFiles += "$usdName ($frameStart-$frameEnd)"
             if (!$lastSavedDir) { $lastSavedDir = $plan.RenderOutDir }
         } else {
             $errMsg = "USD: $usdName ($frameStart-$frameEnd) のレンダリング中にエラーが発生しました (ExitCode: $LASTEXITCODE)"
-            Write-Host "`n[ERROR] $errMsg" -ForegroundColor Red
-            if ($plan.Notify -eq "Discord") { Send-DiscordNotification -url $plan.DiscordWebhook -title "Husk Render Error" -message "@everyone $errMsg" -color 15158332 }
+            Write-RenderLog "`n[ERROR] $errMsg" $logFile "Red"
+            Send-Notification $plan.Notify "Husk Render Error" "@everyone $errMsg" $plan.DiscordWebhook 15158332
             $failCount++
         }
     }
@@ -394,15 +297,12 @@ if ($renderedFiles.Count -gt 0) {
 Write-Host ("`n" + ("=" * 80)) -ForegroundColor Yellow
 Write-Host "  ALL JOBS FINISHED ($summary)" -ForegroundColor Yellow
 Write-Host ("=" * 80) -ForegroundColor Yellow
-"" | Out-File $logFile -Append -Encoding utf8
-("=" * 80) | Out-File $logFile -Append -Encoding utf8
-"  ALL JOBS FINISHED ($summary)" | Out-File $logFile -Append -Encoding utf8
-("=" * 80) | Out-File $logFile -Append -Encoding utf8
+Write-LogBatch -messages @("", ("=" * 80), "  ALL JOBS FINISHED ($summary)", ("=" * 80)) -logFile $logFile
 if ($conf["NOTIFY"] -eq "Windows Toast") {
-    Send-WindowsToast -title "Husk Render Finished" -message $detailMsg
+    Send-Notification "Windows Toast" "Husk Render Finished" $detailMsg
 }
 elseif ($conf["NOTIFY"] -eq "Discord") {
-    Send-DiscordNotification -url $conf["DISCORD_WEBHOOK"] -title "Husk Render Finished" -message "@everyone $detailMsg"
+    Send-Notification "Discord" "Husk Render Finished" "@everyone $detailMsg" $conf["DISCORD_WEBHOOK"]
 }
 
 # 完了後のアクション処理

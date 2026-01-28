@@ -1,68 +1,24 @@
 ﻿param([string]$dropFile)
 
+# 共通ユーティリティモジュールをインポート
+Import-Module (Join-Path $PSScriptRoot "husk_utils.psm1") -Force
+
 $baseDir = Split-Path -Parent $PSScriptRoot
 $configDir = Join-Path $baseDir "config"
 if (!(Test-Path $configDir)) { New-Item -ItemType Directory $configDir | Out-Null }
 $iniPath = Join-Path $configDir "settings.ini"
 $overridePath = Join-Path $configDir "usd_overrides.xml"
 
-function Normalize-UsdPath {
-    param([string]$path)
-    if ([string]::IsNullOrWhiteSpace($path)) { return $null }
-    try { return (Resolve-Path $path -ErrorAction Stop).ProviderPath } catch { return $path }
-}
-
-function Load-UsdOverrides {
-    param([string]$path)
-    $map = @{}
-    if (!(Test-Path $path)) { return $map }
-    try {
-        $map = Import-Clixml -Path $path -ErrorAction Stop
-        if (-not $map) { $map = @{} }
-    } catch {}
-    return $map
-}
-
-function Save-UsdOverrides {
-    param($map, [string]$path)
-    $map | Export-Clixml -Path $path -Depth 10
-}
-
-function Parse-RangeText {
-    param([string]$text)
-    $ranges = @()
-    if ([string]::IsNullOrWhiteSpace($text)) { return $ranges }
-    foreach ($chunk in $text.Split(",")) {
-        $token = $chunk.Trim()
-        if (-not $token) { continue }
-        if ($token -match "^(-?\d+)-(-?\d+)$") {
-            $start = [int]$matches[1]
-            $end = [int]$matches[2]
-            $ranges += @{ start = $start; end = $end }
-        } elseif ($token -match "^(-?\d+)$") {
-            $val = [int]$matches[1]
-            $ranges += @{ start = $val; end = $val }
-        } else {
-            return $null
-        }
-    }
-    return $ranges
-}
-
 # 1. デフォルト設定の読み込み
-$conf = @{ 
+$defaultConf = @{ 
     USD_LIST=""; OUT_PATH=""; START_FRM="1"; END_FRM="1"; 
     REBOOT="False"; SHUTDOWN_ACTION="None"; SINGLE="False"; HOUDINI_BIN="C:\Program Files\Side Effects Software\Houdini 21.0.440\bin";
     BATCH_MODE="Auto"; OUT_TOGGLE="True"; OUT_NAME_MODE="USD"; OUT_NAME_BASE="render";
     EXT="exr"; PADDING="4"; RES_SCALE="100"; PIXEL_SAMPLES="0"; NOTIFY="None"; DISCORD_WEBHOOK=""; TIMEOUT_WARN="0"; TIMEOUT_KILL="0";
     ENGINE_TYPE="cpu"
 }
-if (Test-Path $iniPath) {
-    Get-Content $iniPath | ForEach-Object {
-        if ($_ -match "^([^=]+)=(.*)$") { $conf[$matches[1].Trim()] = $matches[2].Trim() }
-    }
-}
-$usdOverrides = Load-UsdOverrides $overridePath
+$conf = Import-ConfigIni $iniPath $defaultConf
+$usdOverrides = Import-UsdOverrides $overridePath
 
 Add-Type -AssemblyName System.Windows.Forms
 $f = New-Object Windows.Forms.Form
@@ -165,7 +121,7 @@ function Load-UsdSettings {
         return
     }
     
-    $norm = Normalize-UsdPath $usdPath
+    $norm = Resolve-UsdPath $usdPath
     $override = if($norm){ $usdOverrides[$norm] }else{ $null }
     
     $fname = [System.IO.Path]::GetFileName($usdPath)
@@ -238,7 +194,7 @@ function Save-CurrentUsdSettings {
     if ($script:updatingFromSelection) { return }
     if ([string]::IsNullOrWhiteSpace($script:currentEditingUSD)) { return }
     
-    $norm = Normalize-UsdPath $script:currentEditingUSD
+    $norm = Resolve-UsdPath $script:currentEditingUSD
     if (-not $norm) { return }
     
     $override = @{}
@@ -252,7 +208,7 @@ function Save-CurrentUsdSettings {
         $override.endFrame = [int]$nFE.Value
     } elseif ($rbMulti.Checked) {
         $override.batchMode = "Multi"
-        $rangePairs = Parse-RangeText $txtRanges.Text
+        $rangePairs = ConvertFrom-RangeText $txtRanges.Text
         if ($rangePairs -ne $null -and $rangePairs.Count -gt 0) { 
             $override.ranges = $rangePairs
         }
@@ -277,7 +233,7 @@ function Save-CurrentUsdSettings {
     }
     
     # 変更を即座にXMLファイルに保存
-    Save-UsdOverrides $usdOverrides $overridePath
+    Export-UsdOverrides $usdOverrides $overridePath
     
     Update-GridRow $script:currentEditingUSD
 }
@@ -286,7 +242,7 @@ function Update-GridRow {
     param([string]$usdPath)
     for($i=0; $i -lt $gridUSD.Rows.Count; $i++){
         if($gridUSD.Rows[$i].Tag -eq $usdPath){
-            $norm = Normalize-UsdPath $usdPath
+            $norm = Resolve-UsdPath $usdPath
             $ov = if($norm){ $usdOverrides[$norm] }else{ $null }
             $gridUSD.Rows[$i].Cells[1].Value = Get-RangeSummary $ov $conf
             $gridUSD.Rows[$i].Cells[2].Value = Get-OutputSummary $ov $conf
@@ -322,7 +278,7 @@ if ($conf["USD_LIST"]) {
     $conf["USD_LIST"].Split(",") | ForEach-Object {
         if($_){
             $path = $_.Trim()
-            $norm = Normalize-UsdPath $path
+            $norm = Resolve-UsdPath $path
             $ov = if($norm){ $usdOverrides[$norm] }else{ $null }
             $fname = [System.IO.Path]::GetFileName($path)
             [void]$gridUSD.Rows.Add($fname, (Get-RangeSummary $ov $conf), (Get-OutputSummary $ov $conf), (Get-StatusText $ov))
@@ -331,7 +287,7 @@ if ($conf["USD_LIST"]) {
     }
 }
 if ($dropFile) {
-    $norm = Normalize-UsdPath $dropFile
+    $norm = Resolve-UsdPath $dropFile
     $ov = if($norm){ $usdOverrides[$norm] }else{ $null }
     $fname = [System.IO.Path]::GetFileName($dropFile)
     [void]$gridUSD.Rows.Add($fname, (Get-RangeSummary $ov $conf), (Get-OutputSummary $ov $conf), (Get-StatusText $ov))
@@ -416,7 +372,7 @@ $btnRun = New-Object Windows.Forms.Button; $btnRun.Text="実行"; $btnRun.Locati
 # --- ロジックとイベント ---
 $updatePreview = {
     $first = if($gridUSD.Rows.Count -gt 0){ $gridUSD.Rows[0].Tag }else{ $null }
-    $norm = Normalize-UsdPath $first
+    $norm = Resolve-UsdPath $first
     $ov = if($norm){ $usdOverrides[$norm] }else{ $null }
 
     $dir = if($ov -and $ov.outPath){ $ov.outPath.Replace("\","/") } elseif([string]::IsNullOrWhiteSpace($tOUT.Text)){ if($first){ $p = Split-Path -Parent $first; if($p){ $p.Replace("\","/") }else{"."} } else {"C:/render"} } else { $tOUT.Text.Replace("\","/") }
@@ -496,7 +452,7 @@ $gridUSD.Add_KeyUp({
 
     $idx = $gridUSD.SelectedRows[0].Index
     $path = $gridUSD.Rows[$idx].Tag
-    $usdOverrides.Remove((Normalize-UsdPath $path)) | Out-Null
+    $usdOverrides.Remove((Resolve-UsdPath $path)) | Out-Null
     $gridUSD.Rows.RemoveAt($idx)
     Load-UsdSettings $null
     & $updateControlState
@@ -546,13 +502,13 @@ $f.Add_FormClosing({
     Save-CurrentUsdSettings
     if ($f.DialogResult -eq [Windows.Forms.DialogResult]::OK) {
         $items = @(); foreach($row in $gridUSD.Rows){ if($row.Tag){ $items += $row.Tag } }
-        $normItems = $items | ForEach-Object { Normalize-UsdPath $_ }
+        $normItems = $items | ForEach-Object { Resolve-UsdPath $_ }
         foreach ($key in @($usdOverrides.Keys)) { if (-not $normItems.Contains($key)) { $usdOverrides.Remove($key) | Out-Null } }
 
         $isReboot = ($comboShutdown.Text -eq "再起動")
         $res = @("HOUDINI_BIN=$($tHOU.Text)", "USD_LIST=$([string]::Join(',',$items))", "OUT_PATH=$($tOUT.Text)", "START_FRM=$($nFS.Value)", "END_FRM=$($nFE.Value)", "REBOOT=$isReboot", "SHUTDOWN_ACTION=$($comboShutdown.Text)", "SINGLE=$($cS.Checked)", "BATCH_MODE=$(if($rbAuto.Checked){'Auto'}else{'Manual'})", "OUT_TOGGLE=$($chkOutToggle.Checked)", "OUT_NAME_MODE=$(if($rbNameUSD.Checked){'USD'}else{'Custom'})", "OUT_NAME_BASE=$($tNameBase.Text)", "EXT=$($tExt.Text)", "PADDING=$($nPad.Value)", "RES_SCALE=$($trackRes.Value * 10)", "PIXEL_SAMPLES=$($nPS.Value)", "NOTIFY=$($comboNoti.Text)", "DISCORD_WEBHOOK=$($tWeb.Text)", "TIMEOUT_WARN=$($nTW.Value)", "TIMEOUT_KILL=$($nTK.Value)", "ENGINE_TYPE=$($comboEngine.Text)")
         $res | Set-Content $iniPath -Encoding Default
-        Save-UsdOverrides $usdOverrides $overridePath
+        Export-UsdOverrides $usdOverrides $overridePath
     }
 })
 
@@ -565,7 +521,7 @@ $btnResetToIni.Add_Click({
     }
     $idx = $gridUSD.SelectedRows[0].Index
     $path = $gridUSD.Rows[$idx].Tag
-    $norm = Normalize-UsdPath $path
+    $norm = Resolve-UsdPath $path
     if ($usdOverrides.ContainsKey($norm)) {
         $usdOverrides.Remove($norm)
         $gridUSD.Rows[$idx].Cells[1].Value = Get-RangeSummary $null $conf
@@ -613,7 +569,7 @@ $gridUSD.Add_DragDrop({
     $files = $_.Data.GetData([Windows.Forms.DataFormats]::FileDrop)
     foreach ($file in $files) {
         if ($file -match "\.usd[azc]?$") {
-            $norm = Normalize-UsdPath $file
+            $norm = Resolve-UsdPath $file
             $ov = if($norm){ $usdOverrides[$norm] }else{ $null }
             $fname = [System.IO.Path]::GetFileName($file)
             [void]$gridUSD.Rows.Add($fname, (Get-RangeSummary $ov $conf), (Get-OutputSummary $ov $conf), (Get-StatusText $ov))
@@ -630,4 +586,5 @@ $gridUSD.Add_DragDrop({
 $result = $f.ShowDialog()
 if ($result -ne [Windows.Forms.DialogResult]::OK) { exit 2 }
 exit 0
+
 
