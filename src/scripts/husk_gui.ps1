@@ -49,6 +49,126 @@ function Parse-RangeText {
     return $ranges
 }
 
+# コンテキストメニューのヘルパー関数
+function Add-SaveDefaultMenu {
+    param(
+        [System.Windows.Forms.Control]$control,
+        [string]$iniKey,
+        [string]$displayName = "",
+        [string]$valueIfChecked = ""
+    )
+    
+    if (-not $displayName) { $displayName = $iniKey }
+    
+    # iniPathを保存
+    $localIniPath = $script:iniPath
+    
+    $contextMenu = New-Object System.Windows.Forms.ContextMenuStrip
+    
+    # デフォルトとして保存
+    $menuSave = New-Object System.Windows.Forms.ToolStripMenuItem
+    $menuSave.Text = "この値をデフォルトとして保存"
+    $menuSave.Add_Click({
+        # コントロールの値を取得
+        $value = if ($this.Tag.Control -is [System.Windows.Forms.NumericUpDown]) {
+            $this.Tag.Control.Value
+        } elseif ($this.Tag.Control -is [System.Windows.Forms.TrackBar]) {
+            $this.Tag.Control.Value * 10
+        } elseif ($this.Tag.Control -is [System.Windows.Forms.RadioButton]) {
+            # ラジオボタンのグループ内でチェックされているものを探す
+            $parent = $this.Tag.Control.Parent
+            $checkedRadio = $parent.Controls | Where-Object {
+                $_ -is [System.Windows.Forms.RadioButton] -and $_.Checked
+            } | Select-Object -First 1
+            
+            if ($checkedRadio -and $checkedRadio.ContextMenuStrip) {
+                $checkedRadio.ContextMenuStrip.Items[0].Tag.ValueIfChecked
+            } else {
+                "True"
+            }
+        } elseif ($this.Tag.Control -is [System.Windows.Forms.CheckBox]) {
+            if ($this.Tag.ValueIfChecked) {
+                if ($this.Tag.Control.Checked) { $this.Tag.ValueIfChecked } else { "Multi" }
+            } else {
+                $this.Tag.Control.Checked.ToString()
+            }
+        } else {
+            $this.Tag.Control.Text
+        }
+        
+        # INIファイルを読み込んで更新
+        if (Test-Path $this.Tag.IniPath) {
+            $lines = Get-Content $this.Tag.IniPath
+        } else {
+            $lines = @()
+        }
+        
+        $found = $false
+        for ($i = 0; $i -lt $lines.Count; $i++) {
+            if ($lines[$i] -match "^$($this.Tag.Key)=") {
+                $lines[$i] = "$($this.Tag.Key)=$value"
+                $found = $true
+                break
+            }
+        }
+        if (-not $found) {
+            $lines += "$($this.Tag.Key)=$value"
+        }
+        
+        $lines | Set-Content $this.Tag.IniPath -Encoding Default
+        
+        [System.Windows.Forms.MessageBox]::Show(
+            "デフォルト値を保存しました:`n$($this.Tag.DisplayName) = $value",
+            "保存完了",
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Information
+        )
+    })
+    $menuSave.Tag = @{ Control = $control; Key = $iniKey; DisplayName = $displayName; IniPath = $localIniPath; ValueIfChecked = $valueIfChecked }
+    
+    # 値をクリップボードにコピー
+    $menuCopy = New-Object System.Windows.Forms.ToolStripMenuItem
+    $menuCopy.Text = "値をコピー"
+    $menuCopy.Add_Click({
+        $value = if ($this.Tag.Control -is [System.Windows.Forms.NumericUpDown]) {
+            $this.Tag.Control.Value
+        } elseif ($this.Tag.Control -is [System.Windows.Forms.TrackBar]) {
+            $this.Tag.Control.Value * 10
+        } elseif ($this.Tag.Control -is [System.Windows.Forms.RadioButton]) {
+            # ラジオボタンのグループ内でチェックされているものを探す
+            $parent = $this.Tag.Control.Parent
+            $checkedRadio = $parent.Controls | Where-Object {
+                $_ -is [System.Windows.Forms.RadioButton] -and $_.Checked
+            } | Select-Object -First 1
+            
+            if ($checkedRadio -and $checkedRadio.ContextMenuStrip) {
+                $checkedRadio.ContextMenuStrip.Items[0].Tag.ValueIfChecked
+            } else {
+                "True"
+            }
+        } elseif ($this.Tag.Control -is [System.Windows.Forms.CheckBox]) {
+            if ($this.Tag.ValueIfChecked) {
+                if ($this.Tag.Control.Checked) { $this.Tag.ValueIfChecked } else { "Multi" }
+            } else {
+                $this.Tag.Control.Checked.ToString()
+            }
+        } else {
+            $this.Tag.Control.Text
+        }
+        [System.Windows.Forms.Clipboard]::SetText($value.ToString())
+        [System.Windows.Forms.MessageBox]::Show(
+            "クリップボードにコピーしました: $value",
+            "コピー完了",
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Information
+        )
+    })
+    $menuCopy.Tag = @{ Control = $control; ValueIfChecked = $valueIfChecked }
+    
+    $contextMenu.Items.AddRange(@($menuSave, $menuCopy))
+    $control.ContextMenuStrip = $contextMenu
+}
+
 # 1. デフォルト設定の読み込み
 $conf = @{ 
     USD_LIST=""; OUT_PATH=""; START_FRM="1"; END_FRM="1"; 
@@ -568,6 +688,7 @@ $btnResetToIni.Add_Click({
     $norm = Normalize-UsdPath $path
     if ($usdOverrides.ContainsKey($norm)) {
         $usdOverrides.Remove($norm)
+        Save-UsdOverrides $usdOverrides $overridePath
         $gridUSD.Rows[$idx].Cells[1].Value = Get-RangeSummary $null $conf
         $gridUSD.Rows[$idx].Cells[2].Value = Get-OutputSummary $null $conf
         $gridUSD.Rows[$idx].Cells[3].Value = Get-StatusText $null
@@ -625,6 +746,41 @@ $gridUSD.Add_DragDrop({
 
 # --- 起動時の初期反映 ---
 & $updateControlState
+
+# --- コンテキストメニューの追加 ---
+# Render Settings
+Add-SaveDefaultMenu $trackRes "RES_SCALE" "解像度スケール"
+Add-SaveDefaultMenu $nPS "PIXEL_SAMPLES" "ピクセルサンプル数"
+Add-SaveDefaultMenu $comboEngine "ENGINE_TYPE" "レンダリングエンジン"
+
+# Timeout & Notification
+Add-SaveDefaultMenu $nTW "TIMEOUT_WARN" "警告タイムアウト"
+Add-SaveDefaultMenu $nTK "TIMEOUT_KILL" "強制終了タイムアウト"
+Add-SaveDefaultMenu $comboNoti "NOTIFY" "通知方法"
+Add-SaveDefaultMenu $tWeb "DISCORD_WEBHOOK" "Discord Webhook URL"
+
+# Output Settings
+Add-SaveDefaultMenu $chkOutToggle "OUT_TOGGLE" "出力カスタマイズ"
+Add-SaveDefaultMenu $tOUT "OUT_PATH" "出力パス"
+Add-SaveDefaultMenu $rbNameUSD "OUT_NAME_MODE" "ファイル名モード(USD名)" "USD"
+Add-SaveDefaultMenu $rbNameCustom "OUT_NAME_MODE" "ファイル名モード(カスタム)" "Custom"
+Add-SaveDefaultMenu $tNameBase "OUT_NAME_BASE" "出力ファイル名ベース"
+Add-SaveDefaultMenu $nPad "PADDING" "パディング桁数"
+Add-SaveDefaultMenu $tExt "EXT" "ファイル拡張子"
+
+# Frame Range Settings
+Add-SaveDefaultMenu $rbAuto "BATCH_MODE" "レンダリングモード(自動)" "Auto"
+Add-SaveDefaultMenu $rbManual "BATCH_MODE" "レンダリングモード(手動)" "Manual"
+Add-SaveDefaultMenu $rbMulti "BATCH_MODE" "レンダリングモード(複数設定)" "Multi"
+Add-SaveDefaultMenu $nFS "START_FRM" "開始フレーム"
+Add-SaveDefaultMenu $nFE "END_FRM" "終了フレーム"
+Add-SaveDefaultMenu $cS "SINGLE" "単一フレーム" "Single"
+
+# Completion Action
+Add-SaveDefaultMenu $comboShutdown "SHUTDOWN_ACTION" "完了後のアクション"
+
+# Houdini Path
+Add-SaveDefaultMenu $tHOU "HOUDINI_BIN" "Houdini Binパス"
 
 # ウィンドウ表示と終了判定
 $result = $f.ShowDialog()

@@ -53,13 +53,9 @@ function Get-DefaultRanges {
     } elseif ($batchMode -eq "Manual") {
         $start = [int]$conf["START_FRM"]
         $end = [int]$conf["END_FRM"]
-        if ($start -eq $end) {
-            $ranges += @{ start = $start; end = $end }
-        } else {
-            $ranges += @{ start = $start; end = $end }
-        }
+        $ranges += @{ start = $start; end = $end }
     }
-    return $ranges
+    return ,$ranges
 }
 
 function Build-RenderJobPlan {

@@ -13,10 +13,10 @@ if %GUI_EXIT% equ 0 (
     powershell -NoProfile -ExecutionPolicy Bypass -File "%PS_LOG%"
     if %ERRORLEVEL% neq 0 pause
 ) else if %GUI_EXIT% equ 2 (
-    :: ユーザーキャンセル（ダイアログクローズ）
+    :: レンダリングがユーザーによってキャンセルされた場合
     echo [INFO] Render canceled by user.
 ) else (
-    :: GUI実行エラー
+    :: GUI異常終了時
     echo [ERROR] GUI exited with code %GUI_EXIT%.
     pause
 )
