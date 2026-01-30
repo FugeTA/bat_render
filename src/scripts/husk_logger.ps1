@@ -99,6 +99,7 @@ function Build-RenderJobPlan {
     $resScale = if ($override -and $override.resScale) { [int]$override.resScale } else { & $getValue "RES_SCALE" -asInt }
     $pixelSamples = if ($override -and $override.pixelSamples) { [int]$override.pixelSamples } else { & $getValue "PIXEL_SAMPLES" -asInt }
     $engine = if ($override -and $override.engine) { $override.engine } else { & $getValue "ENGINE_TYPE" }
+    $disableMB = & $getValue "DISABLE_MOTIONBLUR" "disableMotionBlur"
     $notify = if ($override -and $override.notify) { $override.notify } else { & $getValue "NOTIFY" }
     $timeoutWarn = & $getValue "TIMEOUT_WARN" -asInt
     $timeoutKill = & $getValue "TIMEOUT_KILL" -asInt
@@ -116,6 +117,7 @@ function Build-RenderJobPlan {
         ResScale = $resScale
         PixelSamples = $pixelSamples
         Engine = $engine
+        DisableMotionBlur = ($disableMB -eq "True")
         Notify = $notify
         TimeoutWarn = $timeoutWarn
         TimeoutKill = $timeoutKill
@@ -324,6 +326,7 @@ foreach ($usdPath in $usdList) {
         if ($plan.Engine) { $argList += @("--engine", $plan.Engine) }
         if ($plan.ResScale -and $plan.ResScale -ne 100) { $argList += @("--res-scale", $plan.ResScale) }
         if ($plan.PixelSamples -gt 0) { $argList += @("--pixel-samples", $plan.PixelSamples) }
+        if ($plan.DisableMotionBlur) { $argList += "--disable-motionblur" }
         $limitWarnMin = $plan.TimeoutWarn
         $limitKillMin = $plan.TimeoutKill
         $timeLimitSec = if ($limitKillMin -gt 0) { [int]([double]$limitKillMin * 60) } else { -1 }
