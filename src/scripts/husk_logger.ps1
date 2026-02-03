@@ -308,7 +308,7 @@ foreach ($usdPath in $usdList) {
         elseif ($plan.Notify -eq "Discord") { Send-DiscordNotification -url $plan.DiscordWebhook -title "Husk Render Started" -message $startMsg -color 3447003 }
 
         # --- 引数構築 ---
-        $argList = @("--verbose", "3", "--skip-licenses", "apprentice", "--make-output-path", "--timelimit-image", "--timelimit-nosave-partial")
+        $argList = @("--verbose", "3", "--skip-licenses", "apprentice", "--make-output-path", "--timelimit-image", "--timelimit-nosave-partial", "--allow-license-retries")
         if ($plan.UseOutput) {
             # 出力ディレクトリを明示的に作成
             if (!(Test-Path $plan.RenderOutDir)) {
