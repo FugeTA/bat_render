@@ -102,6 +102,7 @@ GUI内のほとんどの設定項目を**右クリック**することで、以�
 --make-output-path
 --timelimit-image
 --timelimit-nosave-partial
+--allow-license-retries
 -f <start_frame>
 -n <frame_count>
 --output <path>
