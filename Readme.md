@@ -1,10 +1,10 @@
 # Husk Render Launcher
 
-Houdini Solaris (husk) でのバッチレンダリングを効率化する軽量ツール。
+  Houdini Solaris (husk) でのバッチレンダリングを効率化する軽量ツールです。
 
 ## 概要
 
-GUIによる直感的な設定、詳細なログ収集、リアルタイム進捗監視、完了後の自動アクション実行機能を備えたPowerShellベースのレンダリングランチャー。
+GUIによる直感的な設定、詳細なログ収集、リアルタイム進捗監視、完了後の自動アクション実行機能を備えたPowerShellベースのレンダリングランチャーです。
 
 ## フォルダ構造
 
@@ -13,7 +13,7 @@ src/
 ├── husk_gui_render.bat   # 起動用メインバッチ
 ├── scripts/
 │   ├── husk_gui.ps1      # 設定用GUI (Windows Forms)
-│   └── husk_logger.ps1   # ログ管理・実行エンジン
+│   └── husk_render.ps1   # ログ管理・実行エンジン
 ├── config/
 │   └── settings.ini      # 自動生成される設定データ
 └── log/
@@ -215,7 +215,7 @@ switch ($conf["SHUTDOWN_ACTION"]) {
 
 - **旧設定との互換性**: `REBOOT=True` の場合は `SHUTDOWN_ACTION=再起動` として扱う
 - **TIMEOUT_KILL_ENABLE の廃止**: 0 チェックで判定（シンプル化）
-- **エンコーディング**: UTF-8 で保存（文字化け防止）
+- **エンコーディング**: ANSI, UTF-8(BOM付) で保存（文字化け防止）
 
 ## Houdiniライセンス
 
