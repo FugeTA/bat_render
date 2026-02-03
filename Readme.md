@@ -10,12 +10,17 @@ GUIによる直感的な設定、詳細なログ収集、リアルタイム進�
 
 ```
 src/
-├── husk_gui_render.bat   # 起動用メインバッチ
+├── husk_gui_render.bat        # 起動用メインバッチ
 ├── scripts/
-│   ├── husk_gui.ps1      # 設定用GUI (Windows Forms)
-│   └── husk_logger.ps1   # ログ管理・実行エンジン
+│   ├── HuskCommon.ps1         # 共通ユーティリティモジュール
+│   ├── HuskRenderLogic.ps1    # レンダリングロジックモジュール
+│   ├── HuskGuiComponents.ps1  # GUIコンポーネントモジュール
+│   ├── husk_gui.ps1           # 設定用GUI (Windows Forms)
+│   ├── husk_logger.ps1        # ログ管理・実行エンジン
+│   └── MODULE_README.md       # モジュール構成の詳細説明
 ├── config/
-│   └── settings.ini      # 自動生成される設定データ
+│   ├── settings.ini           # 自動生成される設定データ
+│   └── usd_overrides.xml      # USD個別設定（オーバーライド）
 └── log/
     └── render_YYYYMMDD_HHMM.log  # 詳細ログ (Verbose 3)
 ```
@@ -123,6 +128,53 @@ if %GUI_EXIT% equ 0 (
     :: エラーメッセージ
 )
 ```
+
+## アーキテクチャ
+
+本ツールはモジュール化されており、メンテナンス性と拡張性を重視した設計になっています。
+
+### モジュール構成
+
+#### HuskCommon.ps1 - 共通ユーティリティモジュール
+GUIとレンダリング実行スクリプトの両方で使用される基本的な機能を提供します。
+
+**主な機能**:
+- `Normalize-UsdPath`: パスの正規化処理
+- `Get-USDFrameRange`: hython.exeを使用してUSDファイルからフレーム範囲を取得
+- `Parse-RangeText` / `Convert-RangePairs`: 文字列とオブジェクト形式の相互変換
+- `Get-IniSettings`: デフォルト設定の定義と設定ファイルの読み込み
+- `Load-UsdOverrides` / `Save-UsdOverrides`: 個別設定（XML）の管理
+- `Send-WindowsToast`: Windows通知の送信
+- `Send-DiscordNotification`: Discord Webhookへの通知送信
+
+#### HuskRenderLogic.ps1 - レンダリングロジックモジュール
+レンダリングプラン構築とジョブ管理のロジックを提供します。
+
+**主な機能**:
+- `Get-DefaultRanges`: デフォルトのフレーム範囲を取得
+- `Build-RenderJobPlan`: 個別設定、グローバル設定、自動解析結果を統合してレンダリングプランを構築
+
+#### HuskGuiComponents.ps1 - GUIコンポーネントモジュール
+GUI特有の定型的なコントロール作成機能を提供します。
+
+**主な機能**:
+- `Add-SaveDefaultMenu`: コンテキストメニュー（右クリックメニュー）の生成と保存ロジック
+- `Add-LockButton`: 設定をロックする南京錠ボタンの生成
+
+#### husk_gui.ps1 - GUIメインスクリプト
+フォームのレイアウトとイベント処理を管理し、上記モジュールをインポートして使用します。
+
+#### husk_logger.ps1 - レンダリング実行スクリプト
+モジュールから提供される関数を使用してジョブプランを構築し、husk.exeの実行と監視を行います。
+
+### モジュール化の利点
+
+- **メンテナンス性**: 機能ごとに分離されているため、修正箇所が明確
+- **拡張性**: 新しい通知サービスや設定形式の追加が容易
+- **再利用性**: 他のプロジェクトでモジュールを再利用可能
+- **テスト容易性**: 各モジュールを個別にテスト可能
+
+詳細は [MODULE_README.md](src/scripts/MODULE_README.md) を参照してください。
 
 ## 実装の詳細
 

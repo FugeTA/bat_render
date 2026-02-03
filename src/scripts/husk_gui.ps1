@@ -1,15 +1,47 @@
 ﻿param([string]$dropFile)
 
+<<<<<<< Updated upstream
 # 共通ユーティリティモジュールをインポート
 Import-Module (Join-Path $PSScriptRoot "husk_utils.psm1") -Force
 
+=======
+# モジュールをインポート
+>>>>>>> Stashed changes
 $baseDir = Split-Path -Parent $PSScriptRoot
+$modulePath = $PSScriptRoot
+
+# モジュールファイルのパスを構築
+$commonModulePath = Join-Path $modulePath "HuskCommon.ps1"
+$guiComponentsModulePath = Join-Path $modulePath "HuskGuiComponents.ps1"
+
+# モジュールが存在するか確認
+if (-not (Test-Path $commonModulePath)) {
+    Write-Error "HuskCommon.ps1 が見つかりません: $commonModulePath"
+    Read-Host "Enterキーを押して終了します..."; exit 1
+}
+if (-not (Test-Path $guiComponentsModulePath)) {
+    Write-Error "HuskGuiComponents.ps1 が見つかりません: $guiComponentsModulePath"
+    Read-Host "Enterキーを押して終了します..."; exit 1
+}
+
+# モジュールをドットソーシングで読み込み（スクリプトスコープに直接ロード）
+try {
+    . $commonModulePath
+    . $guiComponentsModulePath
+} catch {
+    Write-Error "モジュールの読み込みに失敗しました: $_"
+    Write-Error "エラー詳細: $($_.Exception.Message)"
+    Write-Error "エラー位置: $($_.InvocationInfo.PositionMessage)"
+    Read-Host "Enterキーを押して終了します..."; exit 1
+}
+
 $configDir = Join-Path $baseDir "config"
 if (!(Test-Path $configDir)) { New-Item -ItemType Directory $configDir | Out-Null }
 $iniPath = Join-Path $configDir "settings.ini"
 $overridePath = Join-Path $configDir "usd_overrides.xml"
 
 # 1. デフォルト設定の読み込み
+<<<<<<< Updated upstream
 $defaultConf = @{ 
     USD_LIST=""; OUT_PATH=""; START_FRM="1"; END_FRM="1"; 
     REBOOT="False"; SHUTDOWN_ACTION="None"; SINGLE="False"; HOUDINI_BIN="C:\Program Files\Side Effects Software\Houdini 21.0.440\bin";
@@ -19,6 +51,10 @@ $defaultConf = @{
 }
 $conf = Import-ConfigIni $iniPath $defaultConf
 $usdOverrides = Import-UsdOverrides $overridePath
+=======
+$script:conf = Get-IniSettings $script:iniPath
+$script:usdOverrides = Load-UsdOverrides $overridePath
+>>>>>>> Stashed changes
 
 Add-Type -AssemblyName System.Windows.Forms
 $f = New-Object Windows.Forms.Form
@@ -26,23 +62,7 @@ $f.Text = "Husk Batch Launcher"; $f.StartPosition = "CenterScreen"
 $f.AutoSize = $true
 $f.AutoSizeMode = [System.Windows.Forms.AutoSizeMode]::GrowAndShrink
 
-# --- 解析関数 ---
-function Get-USDFrameRange {
-    param($usdPath, $houBin)
-    if ([string]::IsNullOrWhiteSpace($usdPath) -or !(Test-Path $usdPath)) { return $null }
-    $hythonExe = Join-Path $houBin "hython.exe"
-    if (!(Test-Path $hythonExe)) { return $null }
-    $pyCode = "from pxr import Usd; stage = Usd.Stage.Open('$($usdPath.Replace('\','/'))'); print(f'START:{stage.GetStartTimeCode()} END:{stage.GetEndTimeCode()}')"
-    $si = New-Object System.Diagnostics.ProcessStartInfo -Property @{
-        FileName = $hythonExe; Arguments = "-c `"$pyCode`""; RedirectStandardOutput = $true;
-        UseShellExecute = $false; CreateNoWindow = $true
-    }
-    $proc = [System.Diagnostics.Process]::Start($si); $out = $proc.StandardOutput.ReadToEnd(); $proc.WaitForExit()
-    if ($out -match "START:([-?\d\.]+) END:([-?\d\.]+)") {
-        return @{ start = [math]::Floor([double]$matches[1]); end = [math]::Floor([double]$matches[2]) }
-    }
-    return $null
-}
+# --- 解析関数とUIヘルパー関数 ---
 
 function Get-RangeSummary {
     param($override, $conf)
@@ -238,6 +258,9 @@ function Save-CurrentUsdSettings {
     Update-GridRow $script:currentEditingUSD
 }
 
+# Save-CurrentUsdSettingsをスクリプトスコープに保存（モジュールから参照できるように）
+$script:SaveCurrentUsdSettings = ${function:Save-CurrentUsdSettings}
+
 function Update-GridRow {
     param([string]$usdPath)
     for($i=0; $i -lt $gridUSD.Rows.Count; $i++){
@@ -252,6 +275,12 @@ function Update-GridRow {
     }
 }
 
+<<<<<<< Updated upstream
+=======
+# Update-GridRowをスクリプトスコープに保存（モジュールから参照できるように）
+$script:UpdateGridRow = ${function:Update-GridRow}
+
+>>>>>>> Stashed changes
 $leftX = 20; $y = 10
 # 1. Houdini Bin
 $l1 = New-Object Windows.Forms.Label; $l1.Text="1. Houdini Binフォルダ:"; $l1.Location="$leftX,$y"; $l1.AutoSize=$true; $f.Controls.Add($l1)
@@ -427,6 +456,9 @@ $updateControlState = {
     & $updatePreview
 }
 
+# updateControlStateをスクリプトスコープに保存（モジュールから参照できるように）
+$script:updateControlState = $updateControlState
+
 # イベント登録
 $nFS.Add_ValueChanged({ if ($cS.Checked) { $nFE.Value = $nFS.Value }; & $updatePreview })
 $tHOU.Add_TextChanged({ & $updateControlState })
@@ -519,6 +551,12 @@ $btnResetToIni.Add_Click({
         [System.Windows.Forms.MessageBox]::Show("USDファイルが選択されていません。", "エラー", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
         return
     }
+<<<<<<< Updated upstream
+=======
+    # 最新のini設定をファイルから再読み込み
+    $script:conf = Get-IniSettings $script:iniPath
+
+>>>>>>> Stashed changes
     $idx = $gridUSD.SelectedRows[0].Index
     $path = $gridUSD.Rows[$idx].Tag
     $norm = Resolve-UsdPath $path

@@ -1,3 +1,4 @@
+<<<<<<< Updated upstream:src/scripts/husk_render.ps1
 ﻿# 共通ユーティリティモジュールをインポート
 Import-Module (Join-Path $PSScriptRoot "husk_utils.psm1") -Force
 # 通知モジュールをインポート
@@ -6,10 +7,40 @@ Import-Module (Join-Path $PSScriptRoot "husk_notifier.psm1") -Force
 Import-Module (Join-Path $PSScriptRoot "husk_logging.psm1") -Force
 
 $baseDir = Split-Path -Parent $PSScriptRoot
+=======
+﻿# モジュールをインポート
+$baseDir = Split-Path -Parent $PSScriptRoot
+$modulePath = $PSScriptRoot
+
+# モジュールファイルのパスを構築
+$commonModulePath = Join-Path $modulePath "HuskCommon.ps1"
+$renderLogicModulePath = Join-Path $modulePath "HuskRenderLogic.ps1"
+
+# モジュールが存在するか確認
+if (-not (Test-Path $commonModulePath)) {
+    Write-Host "[ERROR] HuskCommon.ps1 が見つかりません: $commonModulePath" -ForegroundColor Red
+    Read-Host "Enterキーを押して終了します..."; exit 1
+}
+if (-not (Test-Path $renderLogicModulePath)) {
+    Write-Host "[ERROR] HuskRenderLogic.ps1 が見つかりません: $renderLogicModulePath" -ForegroundColor Red
+    Read-Host "Enterキーを押して終了します..."; exit 1
+}
+
+# モジュールをドットソーシングで読み込み（スクリプトスコープに直接ロード）
+try {
+    . $commonModulePath
+    . $renderLogicModulePath
+} catch {
+    Write-Host "[ERROR] モジュールの読み込みに失敗しました: $_" -ForegroundColor Red
+    Read-Host "Enterキーを押して終了します..."; exit 1
+}
+
+>>>>>>> Stashed changes:src/scripts/husk_logger.ps1
 $iniPath = Join-Path $baseDir "config\settings.ini"
 $overridePath = Join-Path $baseDir "config\usd_overrides.xml"
 $logDir = Join-Path $baseDir "log"
 
+<<<<<<< Updated upstream:src/scripts/husk_render.ps1
 # --- ユーティリティ ---
 
 function Convert-RangePairs {
@@ -118,6 +149,11 @@ function Build-RenderJobPlan {
 # 1. 設定の読み込み
 $conf = Import-ConfigIni $iniPath
 $usdOverrides = Import-UsdOverrides $overridePath
+=======
+# --- 設定の読み込み ---
+$conf = Get-IniSettings $iniPath
+$usdOverrides = Load-UsdOverrides $overridePath
+>>>>>>> Stashed changes:src/scripts/husk_logger.ps1
 
 # Houdiniのパスを通す
 $huskExe = Join-Path $conf["HOUDINI_BIN"] "husk.exe"
